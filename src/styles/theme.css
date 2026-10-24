@@ -1,0 +1,25 @@
+/* Design tokens (Batman Beyond neon-red / dark). Tailwind v4 turns each into utilities:
+   --color-accent -> text-accent, bg-accent/20, border-accent/30 ...
+   Tailwind v4 is not built for Sass preprocessing, so tokens live here as plain CSS (the theme config file).
+   Shops re-skin a drop page by overriding --color-accent / --color-app / --font-shop inline: routes/Shop.svelte.
+   JS mirrors the shop defaults in shared/drop.js THEME_DEFAULTS. */
+@theme {
+  /* Brand red. Scrollbars (app.css) and the legacy fallback page. */
+  --color-neon-red: #ff3344;
+  /* Per-shop accent: buttons, live chip, stock bar, hitmarker "-1". Shop override: theme.accent */
+  --color-accent: #ff3344;
+  /* Page background. Shop override: theme.bg */
+  --color-app: #050508;
+  /* Panels (lib/ui.js CARD) and their hover state */
+  --color-card: #0e0e12;
+  --color-card-hover: #14141a;
+  /* Secondary text: labels, timestamps */
+  --color-muted: #8e8e9f;
+  /* Restock "+1" markers, fulfilled orders, Stripe connected */
+  --color-ok: #3ddc84;
+  /* Body font. Shop override: theme.font, mapped in routes/Shop.svelte FONTS */
+  --font-shop: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Hitmarker motion (components/StockBar.svelte), see animations.css */
+  --animate-hit: hit 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  --animate-rise: rise 900ms ease-out forwards;
+}

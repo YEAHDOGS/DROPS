@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { createHmac } from 'node:crypto'
 
 const PORT = 8799
-const STRIPE_PORT = 12111
+const STRIPE_PORT = 12199
 const BASE = `http://127.0.0.1:${PORT}`
 const VIEWERS = Number(process.env.VIEWERS ?? 1500)
 const BUYERS = Number(process.env.BUYERS ?? 600)

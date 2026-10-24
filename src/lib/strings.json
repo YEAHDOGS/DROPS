@@ -1,0 +1,38 @@
+{
+  "status": {
+    "draft": "Draft",
+    "scheduled": "Upcoming",
+    "live": "Live",
+    "sold_out": "Sold out",
+    "ended": "Ended",
+    "opening": "Opening"
+  },
+  "buyReason": {
+    "claimed": "All claimed. Holds expire. Stay on this page.",
+    "limit": "You hit the per-person limit.",
+    "scheduled": "Not live yet.",
+    "ended": "This drop has ended.",
+    "sold_out": "Sold out.",
+    "draft": "This drop is not published.",
+    "payment": "Checkout failed to open. Try again.",
+    "expired": "Your hold expired. Try again.",
+    "busy": "The line is packed. Try again.",
+    "variant": "Pick an option first.",
+    "challenge": "Couldn't confirm you're human. Try again.",
+    "fallback": "Could not reserve. Try again."
+  },
+  "features": [
+    { "icon": "timer", "title": "One moment, every zone", "text": "Set the second it drops. Everyone on Earth sees the same countdown in their own time." },
+    { "icon": "radio", "title": "Every sale, live", "text": "Stock falls one hitmarker at a time across the whole crowd. Zero oversell, by design." },
+    { "icon": "wallet", "title": "Your Stripe or ours", "text": "Connect your own Stripe for direct payouts, or let DOGS hold the money and pay you out." }
+  ],
+  "windows": { "none": "Until sold out", "1h": "For 1 hour", "24h": "For 24 hours", "7d": "For 1 week", "custom": "Until…" },
+  "crowds": { "small": "Small (under 5k)", "medium": "Medium (300k)", "large": "Large (2.5M)", "massive": "Massive (20M)" },
+  "fonts": { "sans": "Clean sans", "mono": "Mono", "serif": "Serif", "display": "Heavy display" },
+  "layouts": { "split": "Split: media beside the buy panel", "poster": "Poster: media fills the page" },
+  "payouts": {
+    "platform": { "title": "DOGS handles the money", "text": "Sell today. We collect through our Stripe and pay you out." },
+    "connect": { "title": "Connect my Stripe", "text": "Payments land in your own Stripe account, minus the platform fee." }
+  },
+  "dashTabs": { "drops": "Drops", "shop": "Shop", "orders": "Orders", "account": "Account" }
+}

@@ -3,13 +3,9 @@
   import { Radio, Timer, Wallet } from '@lucide/svelte'
   import Shell from '../components/Shell.svelte'
   import logo from '../assets/dogs-logo-cropped.png'
-  import { BTN, BTN_GHOST, CARD } from '../lib/ui.js'
+  import { BTN, BTN_GHOST, CARD, STRINGS } from '../lib/ui.js'
 
-  const FEATURES = [
-    { icon: Timer, title: 'One moment, every zone', text: 'Set the second it drops. Everyone on Earth sees the same countdown in their own time.' },
-    { icon: Radio, title: 'Every sale, live', text: 'Stock falls one hitmarker at a time across the whole crowd. Zero oversell, by design.' },
-    { icon: Wallet, title: 'Your Stripe or ours', text: 'Connect your own Stripe for direct payouts, or let DOGS hold the money and pay you out.' },
-  ]
+  const ICONS = { timer: Timer, radio: Radio, wallet: Wallet }
 </script>
 
 <Shell>
@@ -39,9 +35,10 @@
     </div>
 
     <div class="grid gap-2.5 sm:grid-cols-3 md:gap-4 2xl:gap-8">
-      {#each FEATURES as f}
+      {#each STRINGS.features as f}
+        {@const Icon = ICONS[f.icon]}
         <div class="{CARD} group p-3 transition hover:border-accent/30 md:p-4 2xl:p-8 short:p-2">
-          <f.icon size={18} class="text-accent" />
+          <Icon size={18} class="text-accent" />
           <h3 class="mt-1.5 text-xs font-bold uppercase tracking-wide sm:text-sm 2xl:text-xl">{f.title}</h3>
           <p class="mt-1 text-[11px] leading-relaxed text-neutral-500 sm:text-xs 2xl:text-lg short:hidden">{f.text}</p>
         </div>

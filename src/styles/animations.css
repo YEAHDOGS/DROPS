@@ -1,0 +1,12 @@
+/* Hitmarker: snaps in big, settles, fades. Transform + opacity only, so it never moves layout.
+   Used through the --animate-hit / --animate-rise tokens in theme.css (components/StockBar.svelte). */
+@keyframes hit {
+  0% { transform: translate(-50%, -50%) scale(1.8); opacity: 1; }
+  25% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.9); opacity: 0; }
+}
+
+@keyframes rise {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(-2.5rem); opacity: 0; }
+}
