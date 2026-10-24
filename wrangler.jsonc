@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dogs-drops",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "routes": [{ "pattern": "drops.dogs.red", "custom_domain": true }],
+
+  // The Svelte app. Served straight from the asset layer (no Worker invocation) except the paths below.
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/media/*"]
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "DROP_ROOM", "class_name": "DropRoom" },
+      { "name": "FANOUT", "class_name": "Fanout" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DropRoom", "Fanout"] }],
+
+  // Fill in ids from `wrangler d1 create dogs-drops` / `wrangler kv namespace create STOREFRONT`.
+  "d1_databases": [{ "binding": "DB", "database_name": "dogs-drops", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }],
+  "kv_namespaces": [{ "binding": "KV", "id": "00000000000000000000000000000000" }],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "dogs-drops-media" }],
+
+  "vars": {
+    "PUBLIC_ORIGIN": "https://drops.dogs.red",
+    "PLATFORM_FEE_BPS": "500"
+  },
+  // Secrets (wrangler secret put): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SESSION_SECRET
+
+  "observability": { "enabled": true }
+}
