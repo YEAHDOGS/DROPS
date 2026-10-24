@@ -10,6 +10,7 @@ const BACKOFF_MIN_MS = 500
 const BACKOFF_MAX_MS = 15_000
 const BUSY_RETRY_MS = [120, 480] // leaf is saturated: retry inside this jitter window
 const BUSY_MAX_TRIES = 80
+const EARLY_CLICK_MS = 500 // clicks this close to the start time retry instead of failing
 
 /** @typedef {{ st: string, a: number, s: number, T: number, at: number, end: number|null, ch: boolean, v: number, va?: Record<string, number> }} DropState */
 /** @typedef {{ id: string, n: string, x: string, at: number, k?: string, host?: boolean }} ChatMessage */
@@ -26,6 +27,12 @@ export class LiveDrop {
   /** @type {{ phase: 'idle'|'trying'|'held'|'refused', reason?: string, url?: string, expiresAt?: number }} */
   buying = $state({ phase: 'idle' })
   offset = $state(0) // server clock - local clock
+  /** @type {{ chat: ReturnType<typeof import('../../shared/chat.js').chatConfig> | null, mystery: boolean } | null} rules from the room */
+  cfg = $state(null)
+  /** @type {any} product pushed by the room: instant edits, and the mystery reveal */
+  product = $state(null)
+  /** @type {{ reason: string, wait?: number, at: number } | null} why the last chat message didn't post */
+  chatNo = $state(null)
 
   #url
   #ws = null
@@ -144,6 +151,9 @@ export class LiveDrop {
     if (m.t === 'state') return this.#onState(m)
     if (m.t === 'chat') return this.#onChat(m.c)
     if (m.t === 'buy') return this.#onBuy(m)
+    if (m.t === 'cfg') return void (this.cfg = { chat: m.chat, mystery: m.mystery })
+    if (m.t === 'product') return void (this.product = m.p)
+    if (m.t === 'chatno') return void (this.chatNo = { reason: m.reason, wait: m.wait, at: Date.now() })
     if (m.t === 'mod' && m.del?.length) return void (this.chat = this.chat.filter((x) => !m.del.includes(x.id)))
     if (m.t === 'pong') {
       const rtt = Date.now() - m.c
@@ -197,7 +207,9 @@ export class LiveDrop {
       this.buying = { phase: 'held', url: m.url, expiresAt: m.expiresAt }
       return void location.assign(m.url)
     }
-    if (m.reason === 'busy' && ++this.#tries < BUSY_MAX_TRIES) {
+    // clicked on the zero: the edge hadn't flipped yet, so try again in a beat
+    const early = m.reason === 'scheduled' && this.state && this.now() >= this.state.at - EARLY_CLICK_MS
+    if ((m.reason === 'busy' || early) && ++this.#tries < BUSY_MAX_TRIES) {
       const [lo, hi] = BUSY_RETRY_MS
       return this.#later(() => this.#sendBuy(), lo + Math.random() * (hi - lo))
     }

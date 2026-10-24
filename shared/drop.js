@@ -1,4 +1,5 @@
 // Drop rules shared by the Worker (enforcement) and the Svelte app (forms + countdown). One source of truth.
+import { chatConfig } from './chat.js'
 
 export const LIMITS = {
   HANDLE: 32,
@@ -18,6 +19,7 @@ export const LIMITS = {
   VARIANTS: 20,
   VARIANT_LABEL: 24,
   LINKS: 5,
+  TEASER: 200,
 }
 
 export const DEFAULT_VARIANT = 'one'
@@ -107,12 +109,18 @@ export function validateDrop(d) {
   if (!media.every((m) => m && typeof m.url === 'string' && MEDIA_RE.test(m.url) && /^(image|video)$/.test(m.kind))) {
     return { error: 'Invalid media' }
   }
+  if (d.logo && !MEDIA_RE.test(d.logo)) return { error: 'Invalid logo' }
+  if (d.link && !URL_RE.test(d.link)) return { error: 'Link must start with https://' }
 
   return {
     value: {
       title, slug, priceCents, currency, totalStock, variants, maxPerOrder, startsAt, endsAt, holdMinutes, shards,
       description: str(d.description, LIMITS.DESC),
-      chat: d.chat !== false,
+      chat: chatConfig(d.chat),
+      mystery: d.mystery === true,
+      teaser: str(d.teaser, LIMITS.TEASER),
+      logo: d.logo || null,
+      link: d.link || null,
       published: d.published === true,
       media: media.map((m) => ({ url: m.url, kind: m.kind })),
     },
@@ -163,4 +171,23 @@ export function validateShop(s) {
       },
     },
   }
+}
+
+/** What viewers see of a drop. Mystery drops show only this until the reveal. */
+const PRODUCT_FIELDS = ['title', 'description', 'media', 'priceCents', 'currency', 'variants', 'maxPerOrder']
+
+/** The product half of a drop, safe to publish (variant stock stays private: live numbers come from the room). */
+export function publicProduct(d) {
+  const p = Object.fromEntries(PRODUCT_FIELDS.map((k) => [k, d[k]]))
+  p.variants = (d.variants ?? []).map(({ id, label }) => ({ id, label }))
+  return p
+}
+
+/** A drop as the public storefront may show it at `now`: mystery drops lose every product field until they open. */
+export function storefrontDrop(d, now) {
+  const { holdMinutes, published, variants, ...rest } = d
+  const shown = { ...rest, variants: (variants ?? []).map(({ id, label }) => ({ id, label })) }
+  if (!d.mystery || now >= d.startsAt) return shown
+  for (const k of PRODUCT_FIELDS) delete shown[k]
+  return { ...shown, hidden: true }
 }

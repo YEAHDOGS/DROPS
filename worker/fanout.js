@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers'
 import { LIMITS } from '../shared/drop.js'
+import { chatBlock, chatConfig } from '../shared/chat.js'
 import { parseNode } from './tree.js'
 import { createCheckout, expireCheckout } from './stripe.js'
 import { isHuman } from './turnstile.js'
@@ -13,7 +14,6 @@ const CHILD = 'child'
 const REPORT_MS = 1000 // viewer count report cadence
 const RELINK_MS = 1000
 const MAX_INFLIGHT = 16 // buy attempts one leaf has open against the room; extra clicks get "busy" and retry with jitter
-const CHAT_COOLDOWN_MS = 1500
 const CHAT_UP_PER_SEC = 20
 const CONTROL_RE = /[\u0000-\u001f\u007f]/g
 
@@ -27,6 +27,9 @@ export class Fanout extends DurableObject {
     this.linking = null
     this.state = null // last room state, raw JSON, sent to every new socket
     this.snap = null // same, parsed, for buy gating
+    this.product = null // last product message (raw), for new sockets
+    this.cfg = null // last config message (raw), for new sockets
+    this.chatCfg = chatConfig(false) // parsed chat rules; off until the room says otherwise
     this.inflight = 0
     this.reportTimer = null
     this.chatWindow = 0
@@ -44,6 +47,8 @@ export class Fanout extends DurableObject {
     this.ctx.acceptWebSocket(server, [child ? CHILD : VIEWER])
     server.serializeAttachment(child ? { node: name, n: 0 } : { node: name, buyer: req.headers.get('x-buyer') ?? 'anon', chatAt: 0, hold: null })
     if (this.state) server.send(this.state)
+    if (this.cfg) server.send(this.cfg)
+    if (this.product) server.send(this.product)
     if (child && this.bans.size) server.send(JSON.stringify({ t: 'mod', ban: [...this.bans] }))
     this.ensureLink()
     this.report()
@@ -127,6 +132,8 @@ export class Fanout extends DurableObject {
       const msg = JSON.parse(data)
       if (msg.t === 'state') [this.state, this.snap] = [data, msg]
       if (msg.t === 'mod') this.mod(msg)
+      if (msg.t === 'product') this.product = data
+      if (msg.t === 'cfg') [this.cfg, this.chatCfg] = [data, chatConfig(msg.chat ?? false)]
     } catch { return }
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(data) } catch { /* closing socket */ }
@@ -162,7 +169,8 @@ export class Fanout extends DurableObject {
   chat(ws, att, msg) {
     const now = Date.now()
     const text = clean(msg.text, LIMITS.CHAT_TEXT)
-    if (!this.snap?.ch || !text || now - att.chatAt < CHAT_COOLDOWN_MS) return
+    const block = chatBlock(this.chatCfg, { status: this.snap?.st ?? 'scheduled', text, lastAt: att.chatAt, now })
+    if (block) return ws.send(JSON.stringify({ t: 'chatno', ...block }))
     ws.serializeAttachment({ ...att, chatAt: now })
     const k = att.buyer.slice(0, 12) // author key: lets the shop ban a person without learning who they are
     const m = { id: crypto.randomUUID().slice(0, 12), n: clean(msg.name, LIMITS.CHAT_NAME) || 'anon', x: text, at: now, k }
@@ -181,7 +189,9 @@ export class Fanout extends DurableObject {
     if (att.hold && att.hold.expiresAt > Date.now()) return reply({ ok: true, ...att.hold })
     if (!Number.isInteger(qty) || qty < 1) return reply({ ok: false, reason: 'limit' })
     if (variant !== undefined && typeof variant !== 'string') return reply({ ok: false, reason: 'variant' })
-    if (this.snap && this.snap.st !== 'live') return reply({ ok: false, reason: this.snap.st })
+    // the room's clock decides the opening instant: a stale "scheduled" snapshot past start time goes through
+    const opening = this.snap?.st === 'scheduled' && Date.now() >= this.snap.at
+    if (this.snap && this.snap.st !== 'live' && !opening) return reply({ ok: false, reason: this.snap.st })
     const left = this.snap ? (variant && this.snap.va ? this.snap.va[variant] ?? 0 : this.snap.a) : Infinity
     if (left < qty) return reply({ ok: false, reason: 'claimed' })
     if (this.inflight >= MAX_INFLIGHT) return reply({ ok: false, reason: 'busy' })

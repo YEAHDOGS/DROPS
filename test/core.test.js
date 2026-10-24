@@ -62,7 +62,7 @@ describe('drop rules', () => {
 
   it('normalizes a valid drop', () => {
     const { value } = validateDrop(base)
-    expect(value).toMatchObject({ slug: 'kid-a-100-copies', currency: 'usd', maxPerOrder: 1, holdMinutes: 10, chat: true, published: false })
+    expect(value).toMatchObject({ slug: 'kid-a-100-copies', currency: 'usd', maxPerOrder: 1, holdMinutes: 10, chat: { mode: 'open' }, mystery: false, published: false })
   })
 
   it('rejects bad input with a readable reason', () => {
@@ -86,5 +86,44 @@ describe('content security policy', () => {
     const script = readFileSync('index.html', 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]
     const hash = createHash('sha256').update(script).digest('base64')
     expect(readFileSync('public/_headers', 'utf8')).toContain(`'sha256-${hash}'`)
+  })
+})
+
+describe('chat rules', async () => {
+  const { chatBlock, chatConfig } = await import('../shared/chat.js')
+  const open = chatConfig({ mode: 'open', slowSec: 5, maxLen: 30 })
+  const at = { status: 'live', lastAt: 0, now: 10_000 }
+
+  it('normalizes old booleans and junk', () => {
+    expect(chatConfig(false).mode).toBe('off')
+    expect(chatConfig(true).mode).toBe('open')
+    expect(chatConfig({ mode: 'party', slowSec: 9999, maxLen: 1 })).toMatchObject({ mode: 'open', slowSec: 120, maxLen: 20 })
+  })
+
+  it('enforces mode, timing, links, length and slow mode', () => {
+    expect(chatBlock(open, { ...at, text: 'yo' })).toBeNull()
+    expect(chatBlock(chatConfig(false), { ...at, text: 'yo' }).reason).toBe('off')
+    expect(chatBlock(chatConfig({ mode: 'host' }), { ...at, text: 'yo' }).reason).toBe('host')
+    expect(chatBlock(chatConfig({ whenLive: true }), { ...at, status: 'scheduled', text: 'yo' }).reason).toBe('not_live')
+    for (const link of ['http://x.co', 'go to www.scam', 'buy at cheapkicks.shop']) expect(chatBlock(open, { ...at, text: link }).reason).toBe('link')
+    expect(chatBlock(chatConfig({ links: true }), { ...at, text: 'see radiohead.com' })).toBeNull()
+    expect(chatBlock(open, { ...at, text: 'x'.repeat(31) }).reason).toBe('long')
+    expect(chatBlock(open, { ...at, text: 'yo', lastAt: 8000 })).toEqual({ reason: 'slow', wait: 3000 })
+  })
+})
+
+describe('mystery drops', async () => {
+  const { storefrontDrop } = await import('../shared/drop.js')
+  const d = { id: 'd', slug: 'vault', title: 'Secret', description: 'shh', media: [{ url: '/media/a/b.png', kind: 'image' }], priceCents: 9900, currency: 'usd',
+    variants: [{ id: 's', label: 'S', stock: 5 }], maxPerOrder: 1, startsAt: 1000, mystery: true, teaser: 'soon', totalStock: 5, holdMinutes: 10, published: true }
+
+  it('seals every product field until the drop opens, and never publishes per-option stock', () => {
+    const before = storefrontDrop(d, 999)
+    expect(JSON.stringify(before)).not.toMatch(/Secret|shh|b\.png|9900|"S"/)
+    expect(before).toMatchObject({ hidden: true, teaser: 'soon', totalStock: 5 })
+    const after = storefrontDrop(d, 1000)
+    expect(after).toMatchObject({ title: 'Secret', variants: [{ id: 's', label: 'S' }] })
+    expect(after.variants[0].stock).toBeUndefined()
+    expect(after.holdMinutes).toBeUndefined()
   })
 })

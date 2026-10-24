@@ -3,6 +3,8 @@ import * as dash from './dash.js'
 import { fail, json, roomOf } from './http.js'
 import { depthFor, nodeName } from './tree.js'
 import { refundPayment, verifyWebhook } from './stripe.js'
+import { loadShop, publishStorefront, storefrontData } from './shop.js'
+import { storefrontDrop } from '../shared/drop.js'
 
 export { DropRoom } from './room.js'
 export { Fanout } from './fanout.js'
@@ -91,10 +93,25 @@ async function whoami(req, env, ctx, match) {
   return mid ? dash.me(req, env, mid, match) : json(null)
 }
 
+/**
+ * Shop + drops. KV answers instantly from the edge; when it doesn't know the shop, or a drop the page asked for
+ * (`?d=slug`, published seconds ago), D1 answers and the KV copy heals. Mystery drops are stripped here, per request.
+ */
 async function storefront(req, env, ctx, [, handle]) {
-  const data = await env.KV.get(`shop:${handle}`, { type: 'json', cacheTtl: STOREFRONT_TTL_S })
+  const want = new URL(req.url).searchParams.get('d')
+  let data = await env.KV.get(`shop:${handle}`, { type: 'json', cacheTtl: STOREFRONT_TTL_S })
+  if (!data || (want && !data.drops.some((d) => d.slug === want))) {
+    const row = await env.DB.prepare('SELECT id FROM merchants WHERE handle = ?').bind(handle).first()
+    const shop = row && (await loadShop(env, row.id))
+    const fresh = shop && storefrontData(shop)
+    // heal KV only when it really was stale: junk ?d= slugs must not turn into KV writes
+    if (fresh && (!data || fresh.drops.some((d) => d.slug === want))) ctx.waitUntil(publishStorefront(env, shop))
+    data = fresh ?? data
+  }
   if (!data) return fail(404, 'No shop at that handle')
-  return json({ ...data, turnstile: env.TURNSTILE_SITE_KEY || null }, 200, { 'Cache-Control': 'public, max-age=10' })
+  const now = Date.now()
+  const drops = data.drops.map((d) => storefrontDrop(d, now))
+  return json({ shop: data.shop, drops, turnstile: env.TURNSTILE_SITE_KEY || null }, 200, { 'Cache-Control': 'public, max-age=10' })
 }
 
 /**

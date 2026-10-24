@@ -3,8 +3,9 @@
   import { ChevronLeft, ChevronRight } from '@lucide/svelte'
   import logo from '../assets/dogs-logo-cropped.png'
 
-  /** @type {{ media: { url: string, kind: 'image'|'video' }[], title: string }} */
-  let { media, title } = $props()
+  /** @type {{ media?: { url: string, kind: 'image'|'video' }[], title?: string, mystery?: boolean, fit?: 'cover'|'contain' }} */
+  let { media = [], title = '', mystery = false, fit = 'cover' } = $props()
+  const FIT = { cover: 'object-cover', contain: 'object-contain p-4' }
   let index = $state(0)
   const item = $derived(media[index % Math.max(1, media.length)])
   const step = (d) => (index = (index + d + media.length) % media.length)
@@ -12,12 +13,15 @@
 </script>
 
 <div class="relative flex h-full min-h-0 items-center justify-center overflow-hidden rounded-2xl border border-white/5 bg-card/40">
-  {#if !item}
+  {#if mystery}
+    <img src={logo} alt="" class="h-1/2 max-h-72 w-auto object-contain opacity-40 blur-md" />
+    <span class="absolute text-[9rem] font-black leading-none text-accent drop-shadow-[0_0_40px] drop-shadow-accent/60 animate-pulse sm:text-[11rem] 2xl:text-[20rem] short:text-8xl" aria-label="Mystery">?</span>
+  {:else if !item}
     <img src={logo} alt="" class="h-1/2 max-h-72 w-auto object-contain opacity-80 animate-[pulse_6s_ease-in-out_infinite]" />
   {:else if item.kind === 'video'}
-    {#key item.url}<video src={item.url} class="h-full w-full object-cover" autoplay muted loop playsinline aria-label={title}></video>{/key}
+    {#key item.url}<video src={item.url} class="h-full w-full {FIT[fit]}" autoplay muted loop playsinline aria-label={title}></video>{/key}
   {:else}
-    <img src={item.url} alt={title} class="h-full w-full object-cover" />
+    <img src={item.url} alt={title} class="h-full w-full {FIT[fit]}" />
   {/if}
 
   {#if media.length > 1}

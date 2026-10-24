@@ -16,7 +16,8 @@
   let { drop, live, now, drops, handle, notice, ondismiss, sitekey, class: cls = '' } = $props()
 
   let qty = $state(1)
-  const options = $derived(drop.variants.filter((v) => v.label))
+  const options = $derived((drop.variants ?? []).filter((v) => v.label))
+  const hidden = $derived(!!drop.hidden)
   let picked = $state('')
   /** @type {Turnstile | undefined} */
   let turnstile = $state()
@@ -45,15 +46,21 @@
       {/if}
       <span class="text-[10px] uppercase tracking-widest text-muted 2xl:text-sm">{when(drop.startsAt)}</span>
     </div>
-    <h1 class="mt-2 text-xl font-black uppercase leading-tight tracking-wide sm:text-2xl lg:text-3xl 2xl:text-5xl short:mt-1 short:text-lg">{drop.title}</h1>
-    <p class="mt-1 text-lg font-bold text-accent 2xl:text-3xl short:text-base">{money(drop.priceCents, drop.currency)}</p>
-    {#if drop.description}
-      <p class="selectable mt-2 line-clamp-2 whitespace-pre-line text-sm text-neutral-400 sm:line-clamp-none 2xl:text-xl short:hidden">{drop.description}</p>
+    {#if hidden}
+      <h1 class="mt-2 text-xl font-black uppercase leading-tight tracking-wide sm:text-2xl lg:text-3xl 2xl:text-5xl short:mt-1 short:text-lg">{STRINGS.mystery.title}</h1>
+      <p class="mt-1 text-lg font-bold tracking-[.4em] text-accent 2xl:text-3xl short:text-base">{STRINGS.mystery.price}</p>
+      <p class="selectable mt-2 whitespace-pre-line text-sm text-neutral-300 2xl:text-xl short:line-clamp-1">{drop.teaser || STRINGS.mystery.fallback}</p>
+    {:else}
+      <h1 class="mt-2 text-xl font-black uppercase leading-tight tracking-wide sm:text-2xl lg:text-3xl 2xl:text-5xl short:mt-1 short:text-lg">{drop.title}</h1>
+      <p class="mt-1 text-lg font-bold text-accent 2xl:text-3xl short:text-base">{money(drop.priceCents, drop.currency)}</p>
+      {#if drop.description}
+        <p class="selectable mt-2 line-clamp-2 whitespace-pre-line text-sm text-neutral-400 sm:line-clamp-none 2xl:text-xl short:hidden">{drop.description}</p>
+      {/if}
     {/if}
   </div>
 
   {#if s && status === 'scheduled'}
-    <Countdown target={s.at} {now} label="Drops in" />
+    <Countdown target={s.at} {now} label={hidden ? STRINGS.mystery.countdown : 'Drops in'} />
   {:else if s && status === 'live' && s.end}
     <Countdown target={s.end} {now} label="Sale ends in" />
   {/if}
@@ -80,13 +87,13 @@
       <Turnstile bind:this={turnstile} {sitekey} ontoken={(t) => live.setToken(t)} />
     {/if}
     <div class="flex gap-2">
-      {#if drop.maxPerOrder > 1}
+      {#if drop.maxPerOrder > 1 && !hidden}
         <select class="rounded-xl border border-white/10 bg-black/40 px-2 text-sm 2xl:text-lg" bind:value={qty} aria-label="Quantity">
           {#each Array.from({ length: drop.maxPerOrder }, (_, i) => i + 1) as n}<option value={n}>{n}</option>{/each}
         </select>
       {/if}
-      <button class="{BTN} flex-1 py-3.5! text-base! 2xl:py-6! 2xl:text-2xl!" disabled={!canBuy} onclick={() => live?.buy(qty, options.length > 1 ? variant : undefined)}>
-        {label}
+      <button class="{BTN} flex-1 py-3.5! text-base! 2xl:py-6! 2xl:text-2xl!" disabled={!canBuy || hidden} onclick={() => live?.buy(qty, options.length > 1 ? variant : undefined)}>
+        {hidden ? STRINGS.mystery.button : label}
       </button>
     </div>
   </div>
@@ -94,7 +101,7 @@
   {#if drops.length > 1}
     <nav class="flex flex-wrap gap-1.5 border-t border-white/5 pt-3 short:hidden" aria-label="More drops">
       {#each drops as d (d.id)}
-        <a href="/{handle}/{d.slug}" class="{CHIP} {d.id === drop.id ? 'bg-accent text-white' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}">{d.title}</a>
+        <a href="/{handle}/{d.slug}" class="{CHIP} {d.id === drop.id ? 'bg-accent text-white' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}">{d.hidden ? STRINGS.mystery.title : d.title}</a>
       {/each}
     </nav>
   {/if}

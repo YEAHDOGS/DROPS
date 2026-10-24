@@ -10,3 +10,10 @@
   0% { transform: translateY(0); opacity: 1; }
   100% { transform: translateY(-2.5rem); opacity: 0; }
 }
+
+/* Mystery reveal: the whole room flashes in on the same tick (routes/Shop.svelte). */
+@keyframes reveal {
+  0% { opacity: 0; transform: scale(1.06); filter: blur(18px) brightness(2.5); }
+  60% { opacity: 1; filter: blur(0) brightness(1.4); }
+  100% { opacity: 1; transform: scale(1); filter: none; }
+}

@@ -22,17 +22,79 @@
     "fallback": "Could not reserve. Try again."
   },
   "features": [
-    { "icon": "timer", "title": "One moment, every zone", "text": "Set the second it drops. Everyone on Earth sees the same countdown in their own time." },
-    { "icon": "radio", "title": "Every sale, live", "text": "Stock falls one hitmarker at a time across the whole crowd. Zero oversell, by design." },
-    { "icon": "wallet", "title": "Your Stripe or ours", "text": "Connect your own Stripe for direct payouts, or let DOGS hold the money and pay you out." }
+    {
+      "icon": "timer",
+      "title": "One moment, every zone",
+      "text": "Set the second it drops. Everyone on Earth sees the same countdown in their own time."
+    },
+    {
+      "icon": "radio",
+      "title": "Every sale, live",
+      "text": "Stock falls one hitmarker at a time across the whole crowd. Zero oversell, by design."
+    },
+    {
+      "icon": "wallet",
+      "title": "Your Stripe or ours",
+      "text": "Connect your own Stripe for direct payouts, or let DOGS hold the money and pay you out."
+    }
   ],
-  "windows": { "none": "Until sold out", "1h": "For 1 hour", "24h": "For 24 hours", "7d": "For 1 week", "custom": "Until…" },
-  "crowds": { "small": "Small (under 5k)", "medium": "Medium (300k)", "large": "Large (2.5M)", "massive": "Massive (20M)" },
-  "fonts": { "sans": "Clean sans", "mono": "Mono", "serif": "Serif", "display": "Heavy display" },
-  "layouts": { "split": "Split: media beside the buy panel", "poster": "Poster: media fills the page" },
-  "payouts": {
-    "platform": { "title": "DOGS handles the money", "text": "Sell today. We collect through our Stripe and pay you out." },
-    "connect": { "title": "Connect my Stripe", "text": "Payments land in your own Stripe account, minus the platform fee." }
+  "windows": {
+    "none": "Until sold out",
+    "1h": "For 1 hour",
+    "24h": "For 24 hours",
+    "7d": "For 1 week",
+    "custom": "Until…"
   },
-  "dashTabs": { "drops": "Drops", "shop": "Shop", "orders": "Orders", "account": "Account" }
+  "crowds": {
+    "small": "Small (under 5k)",
+    "medium": "Medium (300k)",
+    "large": "Large (2.5M)",
+    "massive": "Massive (20M)"
+  },
+  "fonts": {
+    "sans": "Clean sans",
+    "mono": "Mono",
+    "serif": "Serif",
+    "display": "Heavy display"
+  },
+  "layouts": {
+    "split": "Split: media beside the buy panel",
+    "poster": "Poster: media fills the page"
+  },
+  "payouts": {
+    "platform": {
+      "title": "DOGS handles the money",
+      "text": "Sell today. We collect through our Stripe and pay you out."
+    },
+    "connect": {
+      "title": "Connect my Stripe",
+      "text": "Payments land in your own Stripe account, minus the platform fee."
+    }
+  },
+  "dashTabs": {
+    "drops": "Drops",
+    "shop": "Shop",
+    "orders": "Orders",
+    "account": "Account"
+  },
+  "chatBlock": {
+    "off": "Chat is off for this drop",
+    "host": "Announcements only",
+    "not_live": "Chat opens when the drop goes live",
+    "link": "No links in this chat",
+    "long": "Too long",
+    "empty": ""
+  },
+  "mystery": {
+    "title": "Mystery drop",
+    "price": "???",
+    "button": "Revealed at the drop",
+    "countdown": "Revealed in",
+    "fallback": "Something is coming."
+  },
+  "chatModes": {
+    "off": "Off",
+    "open": "Open to everyone",
+    "host": "Announcements (only you post)"
+  }
 }

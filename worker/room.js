@@ -22,6 +22,7 @@ export class DropRoom extends DurableObject {
     this.timer = null
     this.dueAt = 0
     this.alarmAt = null
+    this.revealed = false // mystery product already broadcast since the drop opened
   }
 
   async fetch(req) {
@@ -30,6 +31,9 @@ export class DropRoom extends DurableObject {
     this.ctx.acceptWebSocket(server, [CHILD])
     server.serializeAttachment({ n: 0 })
     server.send(this.message([]))
+    server.send(this.configMessage())
+    const product = this.productMessage()
+    if (product) server.send(product)
     if (this.bans.length) server.send(JSON.stringify({ t: 'mod', ban: this.bans }))
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -55,6 +59,8 @@ export class DropRoom extends DurableObject {
     const expired = this.inv.expire(Date.now())
     this.alarmAt = null
     this.changed()
+    this.schedule(0) // open/close/expiry: broadcast now, not on the next tick
+    if (this.inv.config?.mystery && !this.revealed) this.broadcastProduct() // the reveal: same tick for the whole crowd
     await Promise.all(expired.filter((h) => h.session).map((h) => expireCheckout(this.env, h.session)))
   }
 
@@ -62,8 +68,30 @@ export class DropRoom extends DurableObject {
 
   configure(config) {
     const r = this.inv.configure(config)
-    if (r.ok) this.changed()
+    if (!r.ok) return r
+    this.changed()
+    this.broadcast(this.configMessage())
+    this.broadcastProduct() // edits reach every open page instantly; mystery drops stay sealed until they open
     return r
+  }
+
+  /** Rules that change rarely (chat), sent once per connection instead of in every tick. */
+  configMessage() {
+    return JSON.stringify({ t: 'cfg', chat: this.inv.config?.chat ?? null, mystery: !!this.inv.config?.mystery })
+  }
+
+  /** The product, once viewers may see it (mystery drops: only after starts_at). */
+  productMessage() {
+    const c = this.inv.config
+    if (!c?.product || (c.mystery && Date.now() < c.startsAt)) return null
+    return JSON.stringify({ t: 'product', p: c.product })
+  }
+
+  broadcastProduct() {
+    const msg = this.productMessage()
+    if (!msg) return
+    this.revealed = true
+    this.broadcast(msg)
   }
 
   /** Shard count for the live router when the KV copy hasn't propagated yet. Null = not published. */
@@ -126,7 +154,7 @@ export class DropRoom extends DurableObject {
   /** The shop speaks: skips the budget, wears a host badge. */
   say(name, text) {
     const x = String(text ?? '').trim().slice(0, LIMITS.CHAT_TEXT)
-    if (!x) return
+    if (!x || this.inv.config?.chat?.mode === 'off') return
     this.chat.unshift({ id: crypto.randomUUID().slice(0, 12), n: String(name).slice(0, LIMITS.CHAT_NAME), x, at: Date.now(), host: true })
     this.schedule(0)
   }
@@ -142,7 +170,7 @@ export class DropRoom extends DurableObject {
   message(chat) {
     const v = this.viewers()
     this.inv.notePeak(v)
-    return JSON.stringify({ t: 'state', ...this.inv.snapshot(Date.now()), ch: this.inv.config?.chat ?? false, v, c: chat.length ? chat : undefined })
+    return JSON.stringify({ t: 'state', ...this.inv.snapshot(Date.now()), v, c: chat.length ? chat : undefined })
   }
 
   changed() {

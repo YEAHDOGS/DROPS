@@ -61,10 +61,10 @@ function signedWebhook(event) {
 }
 
 // ── viewer ──
-function viewer(i) {
+function viewer(i, id = dropId) {
   return new Promise((resolve, reject) => {
-    const v = { i, last: null, chats: new Map(), buy: null, ws: null, firstSeen: new Map() }
-    const ws = new WebSocket(`${BASE.replace('http', 'ws')}/api/live/${dropId}`, { headers: { 'CF-Connecting-IP': `10.0.${i >> 8}.${i & 255}` } })
+    const v = { i, last: null, chats: new Map(), buy: null, ws: null, firstSeen: new Map(), product: null, productAt: 0, chatno: null }
+    const ws = new WebSocket(`${BASE.replace('http', 'ws')}/api/live/${id}`, { headers: { 'CF-Connecting-IP': `10.0.${i >> 8}.${i & 255}` } })
     v.ws = ws
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data)
@@ -75,6 +75,8 @@ function viewer(i) {
       for (const c of m.c ?? []) v.chats.set(c.id, c)
       for (const id of m.del ?? []) v.chats.delete(id)
       if (m.t === 'buy') v.buy = m
+      if (m.t === 'product') [v.product, v.productAt] = [m.p, Date.now()]
+      if (m.t === 'chatno') v.chatno = m
     }
     ws.onopen = () => resolve(v)
     ws.onerror = reject
@@ -112,7 +114,7 @@ try {
   const cookie = signup.headers.get('set-cookie').split(';')[0]
   check('merchant signs up', signup.status === 201)
   const SIZES = [{ id: 'black', label: 'Black', stock: STOCK / 2 }, { id: 'red', label: 'Red', stock: STOCK / 2 }]
-  const drop = { title: 'Kid A — 100 vinyl', priceCents: 4000, variants: SIZES, maxPerOrder: 1, startsAt: Date.now() + LATER_MS, shards: SHARDS, published: true }
+  const drop = { title: 'Kid A — 100 vinyl', priceCents: 4000, variants: SIZES, maxPerOrder: 1, startsAt: Date.now() + LATER_MS, shards: SHARDS, published: true, chat: { mode: 'open', slowSec: 1 } }
   const created = await fetch(`${BASE}/api/me/drops`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify(drop) })
   dropId = (await created.json()).id
   check('drop published', created.status === 201)
@@ -212,6 +214,36 @@ try {
   const spare = await (await fetch(`${BASE}/api/me/drops`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ ...drop, title: 'Spare' }) })).json()
   const gone = await fetch(`${BASE}/api/me/drops/${spare.id}`, { method: 'DELETE', headers: { Cookie: cookie } })
   check('a drop with sales cannot be deleted; an empty one can', sold.status === 409 && gone.ok)
+
+  // mystery + sale window + chat rules, all enforced at the edge
+  const ask = async (v, msg, key = 'buy') => {
+    v[key] = null
+    v.ws.send(JSON.stringify(msg))
+    await waitFor(() => v[key], 5000, `${key} reply`)
+    return v[key]
+  }
+  const winStart = Date.now() + 5000
+  const sealed = { title: 'Secret box', slug: 'sealed', mystery: true, teaser: 'soon', priceCents: 9900, totalStock: 5, maxPerOrder: 1,
+    startsAt: winStart, endsAt: winStart + 4000, shards: 2, published: true, chat: { mode: 'open', slowSec: 1, links: false } }
+  const myst = await (await fetch(`${BASE}/api/me/drops`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify(sealed) })).json()
+  const front = await (await fetch(`${BASE}/api/s/radiohead?d=sealed`)).text()
+  check('mystery is sealed in the storefront', !front.includes('Secret') && front.includes('"hidden":true'))
+  const watchers = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => viewer(5000 + i, myst.id)))
+  await sleep(500)
+  check('mystery is sealed on the socket', watchers.every((v) => !v.product))
+  check('no sale before the window opens', (await ask(watchers[0], { t: 'buy', qty: 1, ts: 'human' })).reason === 'scheduled')
+  check('chat blocks links at the edge', (await ask(watchers[1], { t: 'chat', name: 'x', text: 'cheap at www.scam.biz' }, 'chatno')).reason === 'link')
+  await waitFor(() => watchers.every((v) => v.product), 10_000, 'reveal')
+  const spread = Math.max(...watchers.map((v) => v.productAt)) - Math.min(...watchers.map((v) => v.productAt))
+  check('reveal reaches every viewer on the same tick', watchers.every((v) => v.product?.title === 'Secret box'), `${watchers[0].productAt - winStart} ms after start, spread ${spread} ms`)
+  check('sale opens with the window', (await ask(watchers[2], { t: 'buy', qty: 1, ts: 'human' })).ok === true)
+  await waitFor(() => Date.now() > winStart + 4200, 6000, 'window end')
+  await waitFor(() => watchers.every((v) => v.last?.st === 'ended'), 3000, 'ended state')
+  check('no sale after the window closes', (await ask(watchers[3], { t: 'buy', qty: 1, ts: 'human' })).reason === 'ended')
+  await fetch(`${BASE}/api/me/drops/${myst.id}`, { method: 'PUT', headers: { Cookie: cookie }, body: JSON.stringify({ ...sealed, chat: { mode: 'host' } }) })
+  await sleep(300)
+  check('announcement mode silences viewers', (await ask(watchers[4], { t: 'chat', name: 'x', text: 'hello' }, 'chatno')).reason === 'host')
+  for (const v of watchers) v.ws.close()
 
   // auth: sign-in link, password change revokes old sessions, rate limit
   await fetch(`${BASE}/api/auth/link`, { method: 'POST', body: JSON.stringify({ email: 'band@example.com' }) })

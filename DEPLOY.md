@@ -77,6 +77,26 @@ Billing afterwards. Repeat at 10x on the next run before promising crowds that s
 Repeat steps 1 to 4 for production with live keys, then Actions → **Deploy** → production.
 Run one real purchase with a real card on a hidden drop and refund it.
 
+## Static assets: Workers (recommended) or Pages
+
+**Default: one Worker with Static Assets** (what `wrangler.jsonc` sets up). The app is served straight from
+Cloudflare's asset layer. Asset requests are free, unlimited and never run Worker code, so 20M page loads cost
+nothing. Only `/api/*` and `/media/*` run the Worker. Each deploy ships the app and the API together as one
+version: no window where new pages talk to an old API, and `wrangler rollback` reverts both.
+
+**If Muse sets it up on Cloudflare Pages instead**, it works as long as the site and API share one hostname
+(cookies, the CSP and WebSockets all rely on that):
+1. Pages project: build `npm run build`, output `dist`, custom domain `drops.dogs.red`. Pages honors
+   `public/_headers` and serves `index.html` for unknown paths (the SPA fallback) out of the box.
+2. Worker: remove `assets` and the `custom_domain` route from `wrangler.jsonc`. Replace them with zone routes
+   `drops.dogs.red/api/*` and `drops.dogs.red/media/*` (`"routes": [{ "pattern": "drops.dogs.red/api/*", "zone_name": "dogs.red" }, ...]`).
+   Worker routes take precedence over Pages on the same hostname.
+3. Every release deploys Pages and the Worker together, API first. Rollbacks have to revert both by hand.
+
+Either way: `/assets/*` files are content-hashed and cached forever. `index.html` revalidates on every load, so a
+deploy reaches everyone on their next page load. Mid-drop changes (edits, reveals, stock) never wait on a deploy
+or a cache: they ride the WebSocket.
+
 ## Rollback
 
 `npx wrangler rollback [--env staging]` restores the previous Worker version. D1 migrations only add tables and

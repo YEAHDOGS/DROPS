@@ -40,7 +40,7 @@
   let notice = $state('')
 
   $effect(() => {
-    api(`/s/${handle}`).then((d) => (data = d), (e) => (error = e.message))
+    api(`/s/${handle}${slug ? `?d=${encodeURIComponent(slug)}` : ''}`).then((d) => (data = d), (e) => (error = e.message))
     api('/me').then((m) => (me = m), () => {})
   })
 
@@ -86,6 +86,17 @@
   const moderate = (m, ban) => api(`/me/drops/${drop.id}/mod`, { method: 'POST', body: ban ? { del: [m.id], ban: [m.k] } : { del: [m.id] } })
 
   const s = $derived(live?.state)
+  // the room's pushed product beats the storefront copy: edits land instantly, mystery drops reveal on the tick
+  const view = $derived(drop && live?.product ? { ...drop, ...live.product, hidden: false } : drop)
+  const rules = $derived(live?.cfg?.chat ?? null)
+  const chatOn = $derived(!!rules && rules.mode !== 'off')
+  let revealKey = $state(0)
+  let wasHidden = false
+  $effect(() => {
+    const hidden = !!view?.hidden
+    if (wasHidden && !hidden) revealKey++
+    wasHidden = hidden
+  })
   const theme = $derived(data?.shop.theme ?? {})
   const layout = $derived(GRID[theme.layout] ? theme.layout : 'split')
   const style = $derived(
@@ -93,7 +104,7 @@
   )
 </script>
 
-<Shell title={data?.shop.name ?? handle} href="/{handle}" logo={theme.logo} links={theme.links ?? []} {style}>
+<Shell title={data?.shop.name ?? handle} href={drop?.link ?? `/${handle}`} logo={drop?.logo ?? theme.logo} links={theme.links ?? []} {style}>
   {#snippet right()}
     {#if s}
       <span class="{CHIP} bg-white/5 text-white" title="Watching now"><Eye size={14} />{compact.format(Math.max(s.v, live?.connected ? 1 : 0))}</span>
@@ -101,7 +112,7 @@
     <button class={BTN_GHOST} onclick={toggleSound} aria-label={sound ? 'Mute dings' : 'Play dings'} aria-pressed={sound}>
       {#if sound}<Volume2 size={16} />{:else}<VolumeX size={16} />{/if}
     </button>
-    {#if s?.ch}
+    {#if chatOn}
       <button class="{BTN_GHOST} lg:hidden" onclick={() => (chatOpen = !chatOpen)} aria-label="Chat" aria-expanded={chatOpen}><MessageCircle size={16} /></button>
     {/if}
   {/snippet}
@@ -116,21 +127,21 @@
       <p class="text-2xl font-black uppercase tracking-widest 2xl:text-5xl">{slug ? 'No drop here' : 'Nothing dropping yet'}</p>
       <p class="mt-2 text-sm text-muted">{theme.tagline || 'Check back soon.'}</p>
     </div>
-  {:else if drop && data}
-    <div class="relative grid min-h-0 flex-1 gap-3 grid-rows-[minmax(0,1fr)_auto] sm:grid-rows-1 md:gap-4 2xl:gap-8 {GRID[layout].base} {s?.ch ? GRID[layout].chat : ''}">
+  {:else if view && data}
+    <div class="relative grid min-h-0 flex-1 gap-3 grid-rows-[minmax(0,1fr)_auto] sm:grid-rows-1 md:gap-4 2xl:gap-8 {GRID[layout].base} {chatOn ? GRID[layout].chat : ''}">
       {#if layout === 'poster'}
         <div class="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
-          <Media media={drop.media} title={drop.title} />
+          {#key revealKey}<div class="h-full {revealKey ? 'animate-reveal' : ''}"><Media media={view.media} title={view.title} mystery={view.hidden} /></div>{/key}
           <div class="absolute inset-0 bg-linear-to-t from-app via-app/40 to-transparent sm:bg-linear-to-l"></div>
         </div>
         <div aria-hidden="true"></div>
       {:else}
-        <Media media={drop.media} title={drop.title} />
+        {#key revealKey}<div class="h-full min-h-0 {revealKey ? 'animate-reveal' : ''}"><Media media={view.media} title={view.title} mystery={view.hidden} /></div>{/key}
       {/if}
 
-      <BuyPanel {drop} {live} {now} drops={data.drops} {handle} {notice} ondismiss={() => (notice = '')} sitekey={data.turnstile} class="relative" />
+      <BuyPanel drop={view} {live} {now} drops={data.drops} {handle} {notice} ondismiss={() => (notice = '')} sitekey={data.turnstile} class="relative" />
 
-      {#if s?.ch}
+      {#if chatOn}
         <aside
           class="{CARD} {chatOpen ? 'fixed inset-x-3 bottom-12 top-16 z-30 flex sm:left-auto sm:w-96' : 'hidden'} min-h-0 flex-col p-3 lg:relative lg:inset-auto lg:z-auto lg:flex lg:w-auto 2xl:p-6"
           aria-label="Live chat"
@@ -139,7 +150,7 @@
             {isOwner ? 'Live chat · you are host' : 'Live chat'}
             <button class="lg:hidden" onclick={() => (chatOpen = false)} aria-label="Close chat"><X size={16} /></button>
           </div>
-          <Chat messages={live?.chat ?? []} onsay={say} onmod={isOwner ? moderate : null} />
+          <Chat messages={live?.chat ?? []} onsay={say} onmod={isOwner ? moderate : null} {rules} status={s?.st ?? 'scheduled'} refused={live?.chatNo ?? null} />
         </aside>
       {/if}
     </div>

@@ -149,13 +149,16 @@ export async function saveDrop(req, env, mid, match) {
   const d = drop
   const now = Date.now()
   const cols = [d.slug, d.title, d.description, d.priceCents, d.currency, d.totalStock, JSON.stringify(d.variants), d.maxPerOrder, d.startsAt, d.endsAt,
-    d.holdMinutes, d.shards, d.chat ? 1 : 0, JSON.stringify(d.media), d.published ? 1 : 0, now]
+    d.holdMinutes, d.shards, d.chat.mode === 'off' ? 0 : 1, JSON.stringify(d.chat), d.mystery ? 1 : 0, d.teaser, d.logo, d.link,
+    JSON.stringify(d.media), d.published ? 1 : 0, now]
   if (existing) {
     await env.DB.prepare(`UPDATE drops SET slug = ?, title = ?, description = ?, price_cents = ?, currency = ?, total_stock = ?, variants = ?, max_per_order = ?,
-      starts_at = ?, ends_at = ?, hold_minutes = ?, shards = ?, chat = ?, media = ?, published = ?, updated_at = ? WHERE id = ?`).bind(...cols, id).run()
+      starts_at = ?, ends_at = ?, hold_minutes = ?, shards = ?, chat = ?, chat_config = ?, mystery = ?, teaser = ?, logo = ?, link = ?,
+      media = ?, published = ?, updated_at = ? WHERE id = ?`).bind(...cols, id).run()
   } else {
     await env.DB.prepare(`INSERT INTO drops (slug, title, description, price_cents, currency, total_stock, variants, max_per_order, starts_at, ends_at,
-      hold_minutes, shards, chat, media, published, updated_at, created_at, merchant_id, id) VALUES (${'?, '.repeat(18)}?)`).bind(...cols, now, mid, id).run()
+      hold_minutes, shards, chat, chat_config, mystery, teaser, logo, link, media, published, updated_at, created_at, merchant_id, id)
+      VALUES (${'?, '.repeat(23)}?)`).bind(...cols, now, mid, id).run()
   }
   await publishStorefront(env, { merchant: shop.merchant, drops: [...shop.drops.filter((x) => x.id !== id), drop] })
   return json(drop, existing ? 200 : 201)

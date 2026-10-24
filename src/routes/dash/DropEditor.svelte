@@ -6,6 +6,7 @@
   import { api } from '../../lib/api.js'
   import { LOCAL_ZONE, WORLD_ZONES, ZONES, money, toMajor, toMinor, utcToZoned, when, zonedToUtc } from '../../lib/time.js'
   import { CROWDS, CURRENCIES, LIMITS, slugify } from '../../../shared/drop.js'
+  import { CHAT_BOUNDS, chatConfig } from '../../../shared/chat.js'
   import { BTN, BTN_GHOST, INPUT, LABEL, STRINGS } from '../../lib/ui.js'
 
   /** @type {{ drop: any, me: any, onsaved: (d: any) => void, ondeleted: () => void }} */
@@ -32,7 +33,11 @@
     end: d.endsAt ? utcToZoned(d.endsAt, LOCAL_ZONE) : '',
     holdMinutes: d.holdMinutes ?? 10,
     crowd: Object.keys(CROWDS).find((k) => CROWDS[k] === d.shards) ?? 'medium',
-    chat: d.chat ?? true,
+    chat: chatConfig(d.chat ?? true),
+    mystery: d.mystery ?? false,
+    teaser: d.teaser ?? '',
+    logo: d.logo ?? null,
+    link: d.link ?? '',
     published: d.published ?? false,
     media: d.media ?? [],
   })
@@ -52,6 +57,19 @@
     const t = setInterval(poll, STATE_POLL_MS)
     return () => clearInterval(t)
   })
+
+  async function uploadLogo(e) {
+    const [file] = e.currentTarget.files
+    if (!file) return
+    uploading++
+    try {
+      f.logo = (await api('/me/media', { file })).url
+    } catch (err) {
+      error = err.message
+    } finally {
+      uploading--
+    }
+  }
 
   async function upload(e) {
     const files = [...e.currentTarget.files]
@@ -87,7 +105,7 @@
     error = ''
     try {
       const body = {
-        ...f, slug: f.slug || slugify(f.title), priceCents: toMinor(f.price, f.currency), startsAt, endsAt,
+        ...f, link: f.link.trim() || null, slug: f.slug || slugify(f.title), priceCents: toMinor(f.price, f.currency), startsAt, endsAt,
         totalStock: Number(f.totalStock), variants: f.variants.map((v) => ({ ...v, stock: Number(v.stock) })), maxPerOrder: Number(f.maxPerOrder), holdMinutes: Number(f.holdMinutes), shards: CROWDS[f.crowd],
       }
       onsaved(await api(drop ? `/me/drops/${drop.id}` : '/me/drops', { method: drop ? 'PUT' : 'POST', body }))
@@ -170,8 +188,46 @@
       <Field label="Checkout hold" hint="Minutes a unit waits for payment">
         <input class={INPUT} type="number" min={LIMITS.MIN_HOLD_MIN} max={LIMITS.MAX_HOLD_MIN} bind:value={f.holdMinutes} />
       </Field>
-      <label class="flex items-center gap-2 text-sm 2xl:text-lg"><input type="checkbox" class="h-4 w-4 accent-accent" bind:checked={f.chat} />Live chat</label>
+      <label class="flex items-center gap-2 text-sm 2xl:text-lg"><input type="checkbox" class="h-4 w-4 accent-accent" bind:checked={f.mystery} />Mystery drop</label>
       <label class="flex items-center gap-2 text-sm 2xl:text-lg"><input type="checkbox" class="h-4 w-4 accent-accent" bind:checked={f.published} />Published</label>
+    </div>
+    {#if f.mystery}
+      <Field label="Teaser" hint="All that shows until the drop opens. Title, price, photos and options stay sealed. Keep the link above neutral too.">
+        <input class={INPUT} bind:value={f.teaser} maxlength={LIMITS.TEASER} placeholder="Something from the vault. 100 made." />
+      </Field>
+    {/if}
+
+    <fieldset class="space-y-3 rounded-xl border border-white/5 p-3 2xl:p-5">
+      <legend class={LABEL}>Live chat</legend>
+      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Field label="Who can post">
+          <select class={INPUT} bind:value={f.chat.mode}>{#each Object.entries(STRINGS.chatModes) as [k, v]}<option value={k}>{v}</option>{/each}</select>
+        </Field>
+        {#if f.chat.mode === 'open'}
+          <Field label="Slow mode" hint="Seconds between messages, per person">
+            <input class={INPUT} type="number" min={CHAT_BOUNDS.SLOW_MIN} max={CHAT_BOUNDS.SLOW_MAX} bind:value={f.chat.slowSec} />
+          </Field>
+          <Field label="Max length"><input class={INPUT} type="number" min={CHAT_BOUNDS.LEN_MIN} max={CHAT_BOUNDS.LEN_MAX} bind:value={f.chat.maxLen} /></Field>
+          <div class="space-y-2 pt-5">
+            <label class="flex items-center gap-2 text-sm 2xl:text-lg"><input type="checkbox" class="h-4 w-4 accent-accent" bind:checked={f.chat.whenLive} />Opens at the drop</label>
+            <label class="flex items-center gap-2 text-sm 2xl:text-lg"><input type="checkbox" class="h-4 w-4 accent-accent" bind:checked={f.chat.links} />Allow links</label>
+          </div>
+        {/if}
+      </div>
+    </fieldset>
+
+    <div class="grid gap-3 sm:grid-cols-[auto_1fr]">
+      <div>
+        <span class={LABEL}>Drop logo</span>
+        <div class="flex items-center gap-2">
+          <label class="flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-dashed border-white/15 hover:border-accent/60 2xl:h-16 2xl:w-16" aria-label="Upload drop logo">
+            {#if f.logo}<img src={f.logo} alt="Drop logo" class="h-full w-full object-contain" />{:else}<ImagePlus size={16} class="text-muted" />{/if}
+            <input type="file" class="sr-only" accept="image/png,image/webp,image/jpeg,image/avif" onchange={uploadLogo} />
+          </label>
+          {#if f.logo}<button type="button" class={BTN_GHOST} onclick={() => (f.logo = null)} aria-label="Remove drop logo"><Trash2 size={14} /></button>{/if}
+        </div>
+      </div>
+      <Field label="Logo links to" hint="Optional. Your site, the album, a collab. Defaults to your shop."><input class={INPUT} bind:value={f.link} placeholder="https://" /></Field>
     </div>
 
     <div>

@@ -6,7 +6,8 @@
   let { target, now, label } = $props()
 
   const p = $derived(parts(target - now))
-  const units = $derived([['days', p.d], ['hrs', p.h], ['min', p.m], ['sec', p.s]].filter(([u, v], i) => i > 0 || v > 0))
+  // leading zero units drop off (days, then hours): the clock gets tighter as the drop gets closer
+  const units = $derived([['days', p.d], ['hrs', p.h], ['min', p.m], ['sec', p.s]].filter(([, v], i) => i === 0 ? p.d > 0 : i === 1 ? p.d + p.h > 0 : true))
 </script>
 
 <div>

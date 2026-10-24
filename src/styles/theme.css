@@ -22,4 +22,6 @@
   /* Hitmarker motion (components/StockBar.svelte), see animations.css */
   --animate-hit: hit 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
   --animate-rise: rise 900ms ease-out forwards;
+  /* Mystery reveal burst (routes/Shop.svelte) */
+  --animate-reveal: reveal 1100ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

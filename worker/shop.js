@@ -1,4 +1,5 @@
-import { DEFAULT_VARIANT } from '../shared/drop.js'
+import { DEFAULT_VARIANT, publicProduct } from '../shared/drop.js'
+import { chatConfig } from '../shared/chat.js'
 import { roomOf } from './http.js'
 
 // Row mapping + publishing. Publishing pushes each drop's config into its DropRoom and a read-only storefront
@@ -37,7 +38,11 @@ export function toDrop(row) {
     endsAt: row.ends_at,
     holdMinutes: row.hold_minutes,
     shards: row.shards,
-    chat: !!row.chat,
+    chat: row.chat_config ? JSON.parse(row.chat_config) : chatConfig(!!row.chat),
+    mystery: !!row.mystery,
+    teaser: row.teaser ?? '',
+    logo: row.logo ?? null,
+    link: row.link ?? null,
     media: JSON.parse(row.media),
     published: !!row.published,
   }
@@ -55,6 +60,8 @@ export function roomConfig(env, m, d) {
     holdMinutes: d.holdMinutes,
     chat: d.chat,
     shards: d.shards,
+    mystery: d.mystery,
+    product: publicProduct(d),
     checkout: {
       dropId: d.id,
       title: d.title,
@@ -79,13 +86,16 @@ export async function loadShop(env, merchantId) {
   return { merchant: toMerchant(row), drops: results.map(toDrop) }
 }
 
+/** Storefront snapshot: published drops in full. The Worker hides mystery fields per request (shared/drop.js). */
+export function storefrontData({ merchant: m, drops }) {
+  return { shop: { handle: m.handle, name: m.name, theme: m.theme }, drops: drops.filter((d) => d.published) }
+}
+
 /** Rewrite the public storefront snapshot (KV). Live stock is not in it: that streams from the room. */
-export async function publishStorefront(env, { merchant: m, drops }) {
-  const live = drops.filter((d) => d.published)
-  const shop = { handle: m.handle, name: m.name, theme: m.theme }
-  const pub = live.map(({ holdMinutes, published, ...d }) => d)
+export async function publishStorefront(env, data) {
+  const { merchant: m, drops } = data
   await Promise.all([
-    env.KV.put(`shop:${m.handle}`, JSON.stringify({ shop, drops: pub })),
+    env.KV.put(`shop:${m.handle}`, JSON.stringify(storefrontData(data))),
     ...drops.map((d) => (d.published ? env.KV.put(`drop:${d.id}`, JSON.stringify({ shards: d.shards })) : env.KV.delete(`drop:${d.id}`))),
   ])
 }
