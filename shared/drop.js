@@ -42,7 +42,7 @@ export const CROWDS = { small: 1, medium: 64, large: 512, massive: 4096 }
 export const HANDLE_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
 export const RESERVED_HANDLES = new Set([
   'api', 'media', 'dash', 'assets', 'src', 'admin', 'login', 'signup', 'www', 'help', 'about', 'terms', 'privacy',
-  'drops', 'dogs', 'static', 'public', 'favicon.svg', 'robots.txt', 'site.webmanifest',
+  'drops', 'dogs', 'demo', 'static', 'public', 'favicon.svg', 'robots.txt', 'site.webmanifest',
 ])
 
 export const CURRENCIES = ['usd', 'eur', 'gbp', 'cad', 'aud', 'jpy', 'mxn', 'nzd', 'sek', 'chf']

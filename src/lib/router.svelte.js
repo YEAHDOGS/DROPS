@@ -17,6 +17,7 @@ addEventListener('popstate', sync)
 document.addEventListener('click', (e) => {
   const a = /** @type {HTMLElement} */ (e.target).closest?.('a')
   if (!a || a.target || a.hasAttribute('download') || a.origin !== location.origin || a.pathname.startsWith('/media/')) return
+  if (a.hash && a.pathname === location.pathname) return // in-page anchor: let the browser scroll
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
   e.preventDefault()
   navigate(a.pathname + a.search)

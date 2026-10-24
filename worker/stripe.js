@@ -1,4 +1,6 @@
-// Minimal Stripe REST client over fetch. No SDK: 6 endpoints don't justify 1MB of dependency.
+import { platformFee } from './fees.js'
+
+// Minimal Stripe REST client over fetch. No SDK: a handful of endpoints don't justify a megabyte of dependency.
 // Money flow: every Checkout runs on the platform account. Merchants on Stripe Connect get destination charges
 // (funds transfer to them minus the platform fee); merchants on "platform" mode get paid out by DOGS.
 
@@ -39,7 +41,7 @@ export async function stripe(env, path, { params, method = params ? 'POST' : 'GE
  * Open a Checkout session for a hold.
  * @param {any} env
  * @param {{ dropId: string, title: string, priceCents: number, currency: string, image?: string, path: string,
- *   destination?: string|null, feeBps: number, shipping: { countries: string[], rates: {label: string, amountCents: number}[] },
+ *   destination?: string|null, shipping: { countries: string[], rates: {label: string, amountCents: number}[] },
  *   invoiceNote?: string }} co checkout config the room was published with
  * @param {{ id: string, qty: number, variant: string }} hold
  */
@@ -68,7 +70,7 @@ export function createCheckout(env, co, hold) {
       payment_intent_data: {
         metadata: meta,
         transfer_data: co.destination ? { destination: co.destination } : undefined,
-        application_fee_amount: co.destination ? Math.round((co.priceCents * hold.qty * co.feeBps) / 10_000) : undefined,
+        application_fee_amount: co.destination ? platformFee(env, co.priceCents * hold.qty) : undefined,
       },
       shipping_address_collection: ships ? { allowed_countries: co.shipping.countries } : undefined,
       shipping_options: ships

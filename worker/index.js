@@ -4,6 +4,7 @@ import { fail, json, roomOf } from './http.js'
 import { depthFor, nodeName } from './tree.js'
 import { refundPayment, verifyWebhook } from './stripe.js'
 import { loadShop, publishStorefront, storefrontData } from './shop.js'
+import { dailyPayouts, reverseTransfer } from './payouts.js'
 import { storefrontDrop } from '../shared/drop.js'
 
 export { DropRoom } from './room.js'
@@ -21,12 +22,13 @@ const ROUTES = [
   ['GET', /^\/api\/live\/([\w-]+)$/, live],
   ['POST', /^\/api\/stripe\/webhook$/, webhook],
   ['GET', /^\/media\/([\w-]+\/[\w-]+\.\w+)$/, media],
-  ['POST', /^\/api\/auth\/signup$/, limited(dash.signup)],
-  ['POST', /^\/api\/auth\/login$/, limited(dash.login)],
-  ['POST', /^\/api\/auth\/link$/, limited(dash.sendLink)],
-  ['POST', /^\/api\/auth\/redeem$/, limited(dash.redeemLink)],
+  ['POST', /^\/api\/auth\/signup$/, gated(limited(dash.signup))],
+  ['POST', /^\/api\/auth\/login$/, gated(limited(dash.login))],
+  ['POST', /^\/api\/auth\/link$/, gated(limited(dash.sendLink))],
+  ['POST', /^\/api\/auth\/redeem$/, gated(limited(dash.redeemLink))],
   ['POST', /^\/api\/auth\/logout$/, dash.logout],
   ['GET', /^\/api\/me$/, whoami],
+  ['GET', /^\/api\/config$/, publicConfig],
   ['PUT', /^\/api\/me$/, signedIn(dash.updateShop)],
   ['PUT', /^\/api\/me\/password$/, signedIn(dash.changePassword)],
   ['POST', /^\/api\/me\/signout-all$/, signedIn(dash.signOutEverywhere)],
@@ -41,6 +43,9 @@ const ROUTES = [
   ['GET', /^\/api\/me\/orders$/, signedIn(dash.listOrders)],
   ['PUT', /^\/api\/me\/orders\/([\w-]+)$/, signedIn(dash.updateOrder)],
   ['POST', /^\/api\/me\/media$/, signedIn(dash.upload)],
+  ['GET', /^\/api\/me\/payouts$/, signedIn(dash.getPayouts)],
+  ['POST', /^\/api\/me\/payouts$/, signedIn(dash.runPayout)],
+  ['PUT', /^\/api\/me\/payouts$/, signedIn(dash.setPayoutSchedule)],
 ]
 
 export default {
@@ -59,6 +64,11 @@ export default {
       console.error(req.method, url.pathname, err)
       return fail(500, 'Something broke on our side')
     }
+  },
+
+  /** Cron (wrangler.jsonc triggers): automatic payouts for creators on the daily schedule. */
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(dailyPayouts(env))
   },
 }
 
@@ -85,6 +95,16 @@ function limited(handler) {
     const { success } = env.AUTH_LIMIT ? await env.AUTH_LIMIT.limit({ key }) : { success: true }
     return success ? handler(req, env, ctx, match) : fail(429, 'Too many tries. Wait a minute.')
   }
+}
+
+/** Launch gate: until SIGNUPS_OPEN is "true", nobody signs up or in. The UI greys out; this is the real lock. */
+function gated(handler) {
+  return (req, env, ctx, match) => (env.SIGNUPS_OPEN === 'true' ? handler(req, env, ctx, match) : fail(403, 'Accounts open soon. Work in progress.'))
+}
+
+/** Public switches the app needs before anyone signs in. */
+function publicConfig(req, env) {
+  return json({ signupsOpen: env.SIGNUPS_OPEN === 'true' }, 200, { 'Cache-Control': 'public, max-age=60' })
 }
 
 /** The dashboard asks "who am I?": signed out is an answer (null), not an error. */
@@ -161,6 +181,9 @@ async function webhook(req, env) {
 
   if (event.type === 'checkout.session.expired' && meta.drop) await roomOf(env, meta.drop).cancel(meta.hold)
   if (event.type === 'charge.refunded') {
+    // refunded from the Stripe dashboard: mirror it, and claw back a payout if one went out
+    const order = await env.DB.prepare(`SELECT * FROM orders WHERE payment_intent = ? AND status != 'refunded'`).bind(s.payment_intent).first()
+    if (order) await reverseTransfer(env, order)
     await env.DB.prepare(`UPDATE orders SET status = 'refunded' WHERE payment_intent = ?`).bind(s.payment_intent).run()
   }
   const paid = ['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(event.type) && s.payment_status === 'paid'
@@ -169,16 +192,27 @@ async function webhook(req, env) {
 }
 
 async function recordSale(env, s, meta) {
-  const drop = await env.DB.prepare('SELECT merchant_id FROM drops WHERE id = ?').bind(meta.drop).first()
+  const drop = await env.DB.prepare('SELECT merchant_id, max_per_order FROM drops WHERE id = ?').bind(meta.drop).first()
   if (!drop) return
   const connected = meta.connected === '1'
-  const r = await roomOf(env, meta.drop).complete(s.id, meta.hold, Number(meta.qty), meta.variant)
+  const room = roomOf(env, meta.drop)
+  const r = await room.complete(s.id, meta.hold, Number(meta.qty), meta.variant)
   if (!r.ok) await refundPayment(env, s.payment_intent, connected) // paid after its hold lapsed and stock ran out
+  const email = s.customer_details?.email?.trim().toLowerCase() ?? null
   const ship = s.collected_information?.shipping_details ?? s.shipping_details ?? null
-  await env.DB.prepare(`INSERT OR IGNORE INTO orders (id, drop_id, merchant_id, payment_intent, qty, amount_cents, currency, email, name, shipping,
-    connected, status, created_at, variant) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const row = await env.DB.prepare(`INSERT OR IGNORE INTO orders (id, drop_id, merchant_id, payment_intent, qty, amount_cents, currency, email, name, shipping,
+    connected, status, created_at, variant) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING rowid`)
     .bind(s.id, meta.drop, drop.merchant_id, s.payment_intent, r.qty ?? Number(meta.qty), s.amount_total, s.currency,
-      s.customer_details?.email ?? null, ship?.name ?? s.customer_details?.name ?? null, ship ? JSON.stringify(ship) : null,
+      email, ship?.name ?? s.customer_details?.name ?? null, ship ? JSON.stringify(ship) : null,
       connected ? 1 : 0, r.ok ? 'paid' : 'refunded', Date.now(), r.variant ?? meta.variant ?? null)
-    .run()
+    .first()
+  if (!row || !r.ok || !email) return // duplicate delivery, already refunded, or no email to check
+
+  // Second line of the per-person limit: one email across every order on this drop. Earlier orders win (rowid).
+  const { n } = await env.DB.prepare(`SELECT COALESCE(SUM(qty), 0) AS n FROM orders WHERE drop_id = ? AND email = ? AND status != 'refunded' AND rowid <= ?`)
+    .bind(meta.drop, email, row.rowid).first()
+  if (n <= drop.max_per_order) return
+  await refundPayment(env, s.payment_intent, connected)
+  await room.unsell(s.id)
+  await env.DB.prepare(`UPDATE orders SET status = 'refunded' WHERE id = ?`).bind(s.id).run()
 }

@@ -4,6 +4,8 @@ import { sendEmail } from './email.js'
 import { body, fail, json, roomOf } from './http.js'
 import { configureRooms, loadShop, publishStorefront, roomConfig, toDrop } from './shop.js'
 import { connectLink, refundPayment, stripe } from './stripe.js'
+import { payOut, payoutSummary, reverseTransfer } from './payouts.js'
+import { feeBps, feeFixed } from './fees.js'
 
 // Merchant API: signup/login, shop settings, drops, orders, uploads. Handlers get (req, env, merchantId, match).
 
@@ -104,7 +106,7 @@ export async function me(req, env, mid) {
       await configureRooms(env, shop)
     }
   }
-  return json({ ...m, origin: env.PUBLIC_ORIGIN })
+  return json({ ...m, origin: env.PUBLIC_ORIGIN, fees: { bps: feeBps(env), fixedCents: feeFixed(env) } })
 }
 
 export async function updateShop(req, env, mid) {
@@ -118,11 +120,32 @@ export async function updateShop(req, env, mid) {
   return json({ ok: true })
 }
 
+/** Stripe onboarding. `{ forPayouts: true }` keeps "DOGS handles the money" and just sets up where payouts land. */
 export async function stripeConnect(req, env, mid) {
   const { merchant } = await loadShop(env, mid)
   const { accountId, url } = await connectLink(env, { ...merchant, stripe_account_id: merchant.stripeAccountId })
-  await env.DB.prepare(`UPDATE merchants SET stripe_account_id = ?, payout_mode = 'connect' WHERE id = ?`).bind(accountId, mid).run()
+  const mode = (await body(req))?.forPayouts ? merchant.payoutMode : 'connect'
+  await env.DB.prepare('UPDATE merchants SET stripe_account_id = ?, payout_mode = ? WHERE id = ?').bind(accountId, mode, mid).run()
   return json({ url })
+}
+
+// ── payouts ──
+
+export async function getPayouts(req, env, mid) {
+  const m = await env.DB.prepare('SELECT payout_mode, payout_schedule, stripe_account_id FROM merchants WHERE id = ?').bind(mid).first()
+  return json({ ...(await payoutSummary(env, mid)), mode: m.payout_mode, schedule: m.payout_schedule, hasAccount: !!m.stripe_account_id })
+}
+
+export async function runPayout(req, env, mid) {
+  const r = await payOut(env, mid, 'manual')
+  return r.ok ? json(r) : fail(409, r.reason)
+}
+
+export async function setPayoutSchedule(req, env, mid) {
+  const schedule = (await body(req))?.schedule
+  if (!['manual', 'daily'].includes(schedule)) return fail(400, 'Schedule must be manual or daily')
+  await env.DB.prepare('UPDATE merchants SET payout_schedule = ? WHERE id = ?').bind(schedule, mid).run()
+  return json({ ok: true })
 }
 
 // ── drops ──
@@ -219,7 +242,10 @@ export async function updateOrder(req, env, mid, match) {
   if (!order) return fail(404, 'No such order')
   if (!['fulfilled', 'refunded'].includes(status)) return fail(400, 'Status must be fulfilled or refunded')
   if (order.status === 'refunded') return fail(409, 'Already refunded')
-  if (status === 'refunded') await refundPayment(env, order.payment_intent, !!order.connected)
+  if (status === 'refunded') {
+    await reverseTransfer(env, order) // already paid out: take the creator's share back first
+    await refundPayment(env, order.payment_intent, !!order.connected)
+  }
   await env.DB.prepare('UPDATE orders SET status = ? WHERE id = ?').bind(status, order.id).run()
   return json({ ok: true })
 }

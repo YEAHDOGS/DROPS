@@ -45,6 +45,7 @@
         </span>
       {/if}
       <span class="text-[10px] uppercase tracking-widest text-muted 2xl:text-sm">{when(drop.startsAt)}</span>
+      {#if drop.maxPerOrder}<span class="{CHIP} bg-white/5 text-neutral-300 short:hidden">Limit {drop.maxPerOrder} per person</span>{/if}
     </div>
     {#if hidden}
       <h1 class="mt-2 text-xl font-black uppercase leading-tight tracking-wide sm:text-2xl lg:text-3xl 2xl:text-5xl short:mt-1 short:text-lg">{STRINGS.mystery.title}</h1>
@@ -66,7 +67,8 @@
   {/if}
 
   {#if s && live}
-    <StockBar shown={live.shown} total={s.T} sold={s.s} marks={live.marks} />
+    <!-- short screens before the drop: nothing is moving yet, so the button wins the space -->
+    <div class={status === 'scheduled' ? 'short:hidden' : ''}><StockBar shown={live.shown} total={s.T} sold={s.s} marks={live.marks} /></div>
   {/if}
 
   <div class="mt-auto space-y-2">

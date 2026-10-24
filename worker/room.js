@@ -124,6 +124,13 @@ export class DropRoom extends DurableObject {
     return r
   }
 
+  /** Refunded for breaking the per-person limit: restock. */
+  unsell(session) {
+    const n = this.inv.unsell(session)
+    if (n) this.changed()
+    return n
+  }
+
   /** Dashboard numbers. */
   state() {
     return { ...this.inv.snapshot(Date.now()), v: this.viewers(), held: this.inv.held, peak: this.inv.peak, soldOutAt: this.inv.soldOutAt }

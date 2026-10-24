@@ -24,7 +24,7 @@ export class LiveDrop {
   /** @type {ChatMessage[]} */
   chat = $state([])
   connected = $state(false)
-  /** @type {{ phase: 'idle'|'trying'|'held'|'refused', reason?: string, url?: string, expiresAt?: number }} */
+  /** @type {{ phase: 'idle'|'trying'|'held'|'refused', reason?: string, url?: string, expiresAt?: number, qty?: number, variant?: string }} */
   buying = $state({ phase: 'idle' })
   offset = $state(0) // server clock - local clock
   /** @type {{ chat: ReturnType<typeof import('../../shared/chat.js').chatConfig> | null, mystery: boolean } | null} rules from the room */
@@ -53,9 +53,17 @@ export class LiveDrop {
   /** Called when the edge asks for a fresh Turnstile pass. @type {(() => void) | null} */
   onChallenge = null
 
-  /** @param {string} dropId */
-  constructor(dropId) {
+  /** Where a won hold goes to pay. The demo swaps in its own checkout. @type {(url: string) => void} */
+  onCheckout = (url) => location.assign(url)
+  #transport
+
+  /**
+   * @param {string} dropId
+   * @param {{ transport?: () => WebSocket }} [opts] swap the socket (the demo's in-browser room, lib/sim.js)
+   */
+  constructor(dropId, { transport } = {}) {
     this.#url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live/${dropId}`
+    this.#transport = transport ?? (() => new WebSocket(this.#url))
     this.#connect()
   }
 
@@ -72,7 +80,7 @@ export class LiveDrop {
   /** @param {number} qty @param {string} [variant] */
   buy(qty = 1, variant = undefined) {
     if (this.buying.phase === 'trying') return
-    if (this.buying.phase === 'held' && this.buying.url) return void location.assign(this.buying.url)
+    if (this.buying.phase === 'held' && this.buying.url) return void this.onCheckout(this.buying.url)
     this.#tries = 0
     this.#qty = qty
     this.#variant = variant
@@ -123,7 +131,7 @@ export class LiveDrop {
 
   #connect() {
     if (this.#closed) return
-    const ws = new WebSocket(this.#url)
+    const ws = this.#transport()
     this.#ws = ws
     ws.onopen = () => {
       this.connected = true
@@ -204,8 +212,8 @@ export class LiveDrop {
 
   #onBuy(m) {
     if (m.ok) {
-      this.buying = { phase: 'held', url: m.url, expiresAt: m.expiresAt }
-      return void location.assign(m.url)
+      this.buying = { phase: 'held', url: m.url, expiresAt: m.expiresAt, qty: m.qty, variant: m.variant }
+      return void this.onCheckout(m.url)
     }
     // clicked on the zero: the edge hadn't flipped yet, so try again in a beat
     const early = m.reason === 'scheduled' && this.state && this.now() >= this.state.at - EARLY_CLICK_MS

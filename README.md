@@ -36,6 +36,13 @@ Stripe ──webhook──► Worker ──► DropRoom.complete ──► D1 or
   endpoints are rate limited per IP.
 - **Shops own their room.** The host can post in chat with a badge, delete messages, and silence people
   everywhere. Silenced people still see their own messages (a shadow ban).
+- **Payouts.** Shops on "DOGS handles the money" are paid with one Stripe Transfer per order, on demand or daily,
+  minus `PLATFORM_FEE_BPS` + `PLATFORM_FEE_FIXED_CENTS`. Refunds claw the transfer back first.
+- **Limits per person.** Counted on paid units by person (hashed IP) at reserve time, and by email at payment
+  (extra orders are auto-refunded and restocked).
+- **Demo mode.** `/demo` builds a drop and `/demo/live` runs it from the customer side. It's the real room UI and
+  client against a crowd simulated in the browser (`src/lib/sim.js`), with no server, no account and no money.
+- **Launch gate.** `SIGNUPS_OPEN=false` keeps accounts closed (enforced by the Worker, greyed out in the UI).
 - **Accounts.** One-time emailed sign-in links (which double as password reset). Changing the password signs out
   every other session.
 
@@ -55,7 +62,7 @@ Webhooks in dev: `stripe listen --forward-to localhost:8787/api/stripe/webhook`.
 
 ```sh
 npm test          # unit: per-size inventory fuzz (50k ops), tree, webhooks, passwords, rules, time zones, CSP
-npm run battle    # real workerd + mock Stripe/Turnstile: 1500 viewers, 600-buyer stampede, 30 checks
+npm run battle    # real workerd + mock Stripe/Turnstile: 1500 viewers, 600-buyer stampede, 44 checks
 VIEWERS=4000 BUYERS=2000 npm run battle
 TARGET=https://drops-staging.dogs.red DROP=<id> VIEWERS=30000 npm run load   # deployed load test
 ```

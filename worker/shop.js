@@ -5,8 +5,6 @@ import { roomOf } from './http.js'
 // Row mapping + publishing. Publishing pushes each drop's config into its DropRoom and a read-only storefront
 // snapshot into KV, so the hot path (20M people loading /handle) never touches D1.
 
-const DEFAULT_FEE_BPS = 500 // 5% platform fee on Connect payouts
-
 export function toMerchant(row) {
   return {
     id: row.id,
@@ -72,7 +70,6 @@ export function roomConfig(env, m, d) {
       image: d.media.find((x) => x.kind === 'image')?.url ?? null,
       path: `/${m.handle}/${d.slug}`,
       destination: m.payoutMode === 'connect' && m.stripeReady ? m.stripeAccountId : null,
-      feeBps: Number(env.PLATFORM_FEE_BPS ?? DEFAULT_FEE_BPS),
       shipping: { countries: m.shipping.countries ?? [], rates: m.shipping.rates ?? [] },
       invoiceNote: m.shipping.invoiceNote ?? '',
     },

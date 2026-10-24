@@ -46,10 +46,10 @@ Every single UI component generated MUST contain explicit Tailwind breakpoint pr
 ### 5. Svelte Specifics
 - When adding lines like 'svelte-ignore a11y_click_events_have_key_events' or 'svelte-ignore a11y_no_static_element_interactions', if they are needed for multiple elements, hoist them to the top of the component so they work for the entire component and you're not repeating those lines everywhere.
 - Do not build the project. npm run build does not do what you think it does in this Vite project. When you are running I will typically have npm run dev going in my own terminal. Use expected values to view the site.
-- SCSS requires @use and NOT @import.
+- No SCSS, no Sass, no preprocessors. Plain CSS only (Tailwind v4 is built on it).
 
 ### 6. PROJECT SPECIFICS
-- This is a Vite Svelte project, using tailwindCSS and SCSS for styling. No typescript, but JSDoc type comments must be added for complex functions/components. Prioritize tailwindCSS for styling and layout, but SCSS should be used for custom styles and animations. Modularize out the styles, colors, and strings. Use .json files where appropriate.
+- This is a Vite Svelte project, using tailwindCSS and plain CSS for styling (no SCSS). No typescript, but JSDoc type comments must be added for complex functions/components. Prioritize tailwindCSS for styling and layout; custom styles and animations go in plain CSS files under /src/styles. Modularize out the styles, colors, and strings. Use .json files where appropriate.
 - All data is being held in a Cloudflare R2 database. This is accessible at https://data.wearedogs.net. Cloudflare's free tier must be prioritized, and tactics like caching, lazy loading, and local data storage must be used to minimize requests to the database. This is CRITICAL.
 - Load the website and look at the styles and functionality, and console errors yourself before completing tasks.
 - Create new branches for tasks, do not push anything to github. Never run git push. Or git reset or git rebase. You may commit your changes locally to your specific branches.
@@ -73,11 +73,11 @@ Every single UI component generated MUST contain explicit Tailwind breakpoint pr
 
 ## Profile: Stylist
 - **Model**: Gemini 3.1 Pro
-- **Allowed Paths**: `/src/**/*.scss`, `/src/**/*.svelte`
+- **Allowed Paths**: `/src/**/*.css`, `/src/**/*.svelte`
 - **Role**: Hardline UI/UX guardian and styling controller. 
 - **Directives**:
-  1. **Use Tailwind CSS in smart ways.** Use tailwindCSS for the bulk of styling to better ensure compatibility and agnostic design across all platforms. For specific styling, custom components, and complex capabilities, use SCSS.
-  2. **Externalized Variables:** All colors, theme variables, fonts, and scales must be stored in external config files (e.g., `/src/styles/_variables.scss`), with comments and links to their usages, indicating their intended purpose. Avoid direct hardcoded hex values or RGB in component files.
+  1. **Use Tailwind CSS in smart ways.** Use tailwindCSS for the bulk of styling to better ensure compatibility and agnostic design across all platforms. For specific styling, custom components, and complex capabilities, use plain CSS.
+  2. **Externalized Variables:** All colors, theme variables, fonts, and scales must be stored in external config files (e.g., `/src/styles/theme.css`), with comments and links to their usages, indicating their intended purpose. Avoid direct hardcoded hex values or RGB in component files.
   3. **Visual Stability (Crucial):** Protect the `WEAREDOGS` typographic layout. Elements entering or exiting the viewport must NEVER trigger layout shifts or text jitter on the core branding text. The text layout must remain as static as an oil painting.
   4. **Responsive Strategy:** Design mobile-first, but scale cleanly up to televisions, car dashboards, and smart displays. Optimize for device-native interaction models (e.g., mobile back-swipe gestures, desktop scrollwheels, volume sync).
 

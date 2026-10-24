@@ -31,11 +31,17 @@
 
   "vars": {
     "PUBLIC_ORIGIN": "https://drops.dogs.red",
-    "PLATFORM_FEE_BPS": "500",
+    "PLATFORM_FEE_BPS": "800",
+    "PLATFORM_FEE_FIXED_CENTS": "30",
+    "PAYOUT_HOLD_HOURS": "0",
+    "SIGNUPS_OPEN": "false",
     "EMAIL_FROM": "DOGS DROPS <drops@dogs.red>",
     "TURNSTILE_SITE_KEY": ""
   },
   // Secrets (wrangler secret put): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SESSION_SECRET, RESEND_API_KEY, TURNSTILE_SECRET
+
+  // Daily automatic creator payouts (worker/payouts.js), 09:17 UTC.
+  "triggers": { "crons": ["17 9 * * *"] },
 
   "observability": { "enabled": true },
 
@@ -57,7 +63,10 @@
       "ratelimits": [{ "name": "AUTH_LIMIT", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }],
       "vars": {
         "PUBLIC_ORIGIN": "https://drops-staging.dogs.red",
-        "PLATFORM_FEE_BPS": "500",
+        "PLATFORM_FEE_BPS": "800",
+        "PLATFORM_FEE_FIXED_CENTS": "30",
+        "PAYOUT_HOLD_HOURS": "0",
+        "SIGNUPS_OPEN": "true",
         "EMAIL_FROM": "DOGS DROPS <drops@dogs.red>",
         "TURNSTILE_SITE_KEY": ""
       }

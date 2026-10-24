@@ -47,6 +47,18 @@ deploys. From a laptop instead: `npm run deploy:staging`.
 4. **Payouts** for "DOGS handles the money" shops: the funds sit in the platform balance. Pay those merchants from
    Stripe (manual transfers or payouts) until an automated payout job exists.
 
+## 4b. Launch switches (`wrangler.jsonc` vars)
+
+| Var | Production now | Meaning |
+|---|---|---|
+| `SIGNUPS_OPEN` | `"false"` | `false` = sign up / sign in refused by the Worker and greyed out ("Work in progress"). The site, shop pages and `/demo` all work. Flip to `"true"` and redeploy to open shops. |
+| `PLATFORM_FEE_BPS` | `"800"` | Platform cut in basis points (800 = 8%). |
+| `PLATFORM_FEE_FIXED_CENTS` | `"30"` | Fixed cut per order, covers the card network's per-charge fee. |
+| `PAYOUT_HOLD_HOURS` | `"0"` | Orders younger than this wait before payout. Raise to 72+ to hold back money against chargebacks. |
+
+Creator payouts run on demand (dashboard → Money → Pay me out) and daily at 09:17 UTC for shops on the automatic
+schedule (`triggers.crons`). Each paid order becomes one Stripe Transfer tied to its charge, so it can't be paid twice.
+
 ## 5. Staging acceptance (all must pass)
 
 - [ ] Sign up, sign out, receive and use an emailed sign-in link, change password.

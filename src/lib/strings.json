@@ -9,7 +9,7 @@
   },
   "buyReason": {
     "claimed": "All claimed. Holds expire. Stay on this page.",
-    "limit": "You hit the per-person limit.",
+    "limit": "You've hit the per-person limit for this drop.",
     "scheduled": "Not live yet.",
     "ended": "This drop has ended.",
     "sold_out": "Sold out.",
@@ -75,6 +75,7 @@
     "drops": "Drops",
     "shop": "Shop",
     "orders": "Orders",
+    "money": "Money",
     "account": "Account"
   },
   "chatBlock": {
@@ -96,5 +97,48 @@
     "off": "Off",
     "open": "Open to everyone",
     "host": "Announcements (only you post)"
+  },
+  "payoutSchedules": {
+    "manual": "When I ask (Pay me out now)",
+    "daily": "Every day, automatically"
+  },
+  "why": {
+    "kicker": "Why DOGS DROPS",
+    "title": "Built so the drop can't go down.",
+    "lede": "Most stores run on a server. A sellout crowd is exactly what knocks a server over. We don't have one to knock over.",
+    "rows": [
+      {
+        "topic": "The rush",
+        "them": "One origin server. The crowd hits it at once: queue pages, timeouts, 503s.",
+        "us": "No origin server. The site is static files on Cloudflare's edge in 300+ cities, and the live room is split across thousands of small edge workers. Built for millions of fans at once."
+      },
+      {
+        "topic": "Stock",
+        "them": "Inventory checked in a busy database. Oversells, then apology emails.",
+        "us": "One atomic counter per drop. Zero oversell, tested against a stampede of hundreds of buyers on 100 units."
+      },
+      {
+        "topic": "Live",
+        "them": "Refresh and hope it's still in stock.",
+        "us": "Every sale lands for everyone as a hitmarker, in milliseconds. The countdown, the reveal and the sellout are the show."
+      },
+      {
+        "topic": "Fair",
+        "them": "Bots and cart-hoarders win.",
+        "us": "Human check before the first buy, holds that expire, a per-person limit counted at payment."
+      },
+      {
+        "topic": "Timing",
+        "them": "Launch at 9am. Whose 9am?",
+        "us": "One second, every timezone. Mystery drops reveal for the whole crowd on the same tick."
+      },
+      {
+        "topic": "Cost",
+        "them": "Servers you pay for all month, idle 99% of it.",
+        "us": "Serverless: you pay for the minutes the drop is live. A quiet shop costs nothing to keep up."
+      }
+    ],
+    "them": "Typical store",
+    "us": "DOGS DROPS"
   }
 }

@@ -21,10 +21,13 @@ export class Inventory {
   constructor(sql) {
     this.sql = sql
     for (const q of SCHEMA) sql.exec(q)
-    for (const table of ['holds', 'sales']) {
+    // in-place upgrades for rooms created before a column existed
+    const UPGRADES = [['holds', 'variant', `TEXT NOT NULL DEFAULT '${DEFAULT_VARIANT}'`], ['sales', 'variant', `TEXT NOT NULL DEFAULT '${DEFAULT_VARIANT}'`], ['sales', 'buyer', 'TEXT']]
+    for (const [table, col, type] of UPGRADES) {
       const cols = sql.exec(`PRAGMA table_info(${table})`).toArray()
-      if (!cols.some((c) => c.name === 'variant')) sql.exec(`ALTER TABLE ${table} ADD COLUMN variant TEXT NOT NULL DEFAULT '${DEFAULT_VARIANT}'`)
+      if (!cols.some((c) => c.name === col)) sql.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`)
     }
+    sql.exec(`CREATE INDEX IF NOT EXISTS sales_buyer ON sales (buyer)`)
     /** @type {any} */
     this.config = this.get('config')
     this.soldOutAt = this.get('soldOutAt')
@@ -110,7 +113,8 @@ export class Inventory {
     if (status !== STATUS.LIVE) return { ok: false, reason: status }
     if (!this.variants.some((v) => v.id === variant)) return { ok: false, reason: 'variant' }
     if (!(Number.isInteger(qty) && qty >= 1 && qty <= c.maxPerOrder)) return { ok: false, reason: 'limit' }
-    const mine = this.sql.exec(`SELECT COALESCE(SUM(qty), 0) AS n FROM holds WHERE buyer = ?`, buyer).one().n
+    // the per-person limit counts what they hold AND what they already paid for
+    const mine = this.sql.exec(`SELECT (SELECT COALESCE(SUM(qty), 0) FROM holds WHERE buyer = ?) + (SELECT COALESCE(SUM(qty), 0) FROM sales WHERE buyer = ?) AS n`, buyer, buyer).one().n
     if (mine + qty > c.maxPerOrder) return { ok: false, reason: 'limit' }
     if (this.availableOf(variant) < qty) return { ok: false, reason: 'claimed' }
 
@@ -128,7 +132,7 @@ export class Inventory {
 
   /** Put a hold's units back on the shelf. Returns the hold, or null if it was already gone. */
   release(id) {
-    const hold = this.sql.exec(`SELECT id, qty, session, variant FROM holds WHERE id = ?`, id).toArray()[0]
+    const hold = this.sql.exec(`SELECT id, qty, session, variant, buyer FROM holds WHERE id = ?`, id).toArray()[0]
     if (!hold) return null
     this.sql.exec(`DELETE FROM holds WHERE id = ?`, id)
     this.heldBy[hold.variant] -= hold.qty
@@ -145,13 +149,22 @@ export class Inventory {
     const units = hold ? hold.qty : qty
     const v = hold ? hold.variant : variant
     if (!hold && this.availableOf(v) < units) return { ok: false, reason: 'oversold' }
-    this.sql.exec(`INSERT INTO sales (session, qty, at, variant) VALUES (?, ?, ?, ?)`, session, units, now, v)
+    this.sql.exec(`INSERT INTO sales (session, qty, at, variant, buyer) VALUES (?, ?, ?, ?, ?)`, session, units, now, v, hold?.buyer ?? null)
     this.soldBy[v] = (this.soldBy[v] ?? 0) + units
     if (!this.soldOutAt && this.sold >= (this.config?.totalStock ?? Infinity)) {
       this.soldOutAt = now
       this.put('soldOutAt', now)
     }
     return { ok: true, qty: units, variant: v }
+  }
+
+  /** Undo a sale (refunded over the limit): the units go back on the shelf. Returns units restocked. */
+  unsell(session) {
+    const sale = this.sql.exec(`SELECT qty, variant FROM sales WHERE session = ?`, session).toArray()[0]
+    if (!sale) return 0
+    this.sql.exec(`DELETE FROM sales WHERE session = ?`, session)
+    this.soldBy[sale.variant] -= sale.qty
+    return sale.qty
   }
 
   /** Drop every hold past its deadline. Returns them so their Checkout sessions can be closed. */

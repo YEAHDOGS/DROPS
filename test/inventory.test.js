@@ -144,3 +144,22 @@ describe('Inventory', () => {
     expect(inv.sold).toBeGreaterThan(STOCK * 0.9)
   })
 })
+
+describe('per-person limit', () => {
+  it('counts paid units, not just open checkouts', () => {
+    const inv = fresh({ totalStock: 10, maxPerOrder: 2 })
+    const a = inv.reserve(2, 'fan', T0, uid())
+    inv.complete('cs_1', a.hold.id, 2, T0)
+    expect(inv.reserve(1, 'fan', T0, uid()).reason).toBe('limit')
+    expect(inv.reserve(2, 'other', T0, uid()).ok).toBe(true)
+  })
+
+  it('restocks a sale refunded for breaking the limit', () => {
+    const inv = fresh({ totalStock: 3, maxPerOrder: 3 })
+    const a = inv.reserve(3, 'fan', T0, uid())
+    inv.complete('cs_1', a.hold.id, 3, T0)
+    expect(inv.available).toBe(0)
+    expect(inv.unsell('cs_1')).toBe(3)
+    expect([inv.sold, inv.available, inv.unsell('cs_1')]).toEqual([0, 3, 0])
+  })
+})

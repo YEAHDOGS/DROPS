@@ -145,7 +145,7 @@
       {:else}
         <Field label="Stock"><input class={INPUT} type="number" min="1" max={LIMITS.MAX_STOCK} bind:value={f.totalStock} required /></Field>
       {/if}
-      <Field label="Max per person"><input class={INPUT} type="number" min="1" max={LIMITS.MAX_PER_ORDER} bind:value={f.maxPerOrder} required /></Field>
+      <Field label="Limit per person" hint="Across all their orders. Shown on the page."><input class={INPUT} type="number" min="1" max={LIMITS.MAX_PER_ORDER} bind:value={f.maxPerOrder} required /></Field>
     </div>
 
     <div>

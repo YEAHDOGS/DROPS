@@ -1,15 +1,12 @@
 <script>
-  // drops.dogs.red/:handle[/:slug] — the live drop room. Data + connection + layout; the panels do the rest.
-  import { Eye, MessageCircle, Volume2, VolumeX, X } from '@lucide/svelte'
+  // drops.dogs.red/:handle[/:slug] — data + connection. The room itself is components/DropRoom.svelte.
   import Shell from '../components/Shell.svelte'
-  import Media from '../components/Media.svelte'
-  import BuyPanel from '../components/BuyPanel.svelte'
-  import Chat from '../components/Chat.svelte'
+  import DropRoom from '../components/DropRoom.svelte'
+  import RoomControls from '../components/RoomControls.svelte'
   import { api } from '../lib/api.js'
   import { LiveDrop } from '../lib/live.svelte.js'
-  import { ding, unlockSound } from '../lib/sound.js'
   import { route, navigate } from '../lib/router.svelte.js'
-  import { BTN_GHOST, CARD, CHIP, SPINNER } from '../lib/ui.js'
+  import { SPINNER } from '../lib/ui.js'
 
   /** @type {{ handle: string, slug?: string }} */
   let { handle, slug } = $props()
@@ -20,12 +17,6 @@
     serif: 'Georgia, "Times New Roman", serif',
     display: '"Arial Black", Impact, "Helvetica Neue", sans-serif',
   }
-  const CLOCK_MS = 250
-  const GRID = {
-    split: { base: 'sm:grid-cols-2', chat: 'lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)_minmax(15rem,19rem)] xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_21rem] 2xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_30rem]' },
-    poster: { base: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]', chat: 'lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)_minmax(15rem,19rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,36rem)_30rem]' },
-  }
-  const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 
   /** @type {{ shop: any, drops: any[], turnstile: string | null } | null} */
   let data = $state(null)
@@ -34,8 +25,6 @@
   let live = $state(null)
   /** @type {any} signed-in merchant, if any: the owner gets moderation tools */
   let me = $state(null)
-  let now = $state(Date.now())
-  let sound = $state(false)
   let chatOpen = $state(false)
   let notice = $state('')
 
@@ -59,11 +48,6 @@
     return () => conn.close()
   })
 
-  $effect(() => {
-    const t = setInterval(() => (now = live ? live.now() : Date.now()), CLOCK_MS)
-    return () => clearInterval(t)
-  })
-
   // back from Stripe Checkout
   $effect(() => {
     if (!live) return
@@ -75,30 +59,11 @@
     navigate(route.path, true)
   })
 
-  async function toggleSound() {
-    sound = !sound
-    if (sound) await unlockSound()
-    if (live) live.onDing = sound ? ding : null
-  }
-
   const isOwner = $derived(me?.handle === handle)
-  const say = (name, text) => (isOwner ? api(`/me/drops/${drop.id}/say`, { method: 'POST', body: { text } }) : live?.say(name, text))
+  const hostSay = (name, text) => api(`/me/drops/${drop.id}/say`, { method: 'POST', body: { text } })
   const moderate = (m, ban) => api(`/me/drops/${drop.id}/mod`, { method: 'POST', body: ban ? { del: [m.id], ban: [m.k] } : { del: [m.id] } })
 
-  const s = $derived(live?.state)
-  // the room's pushed product beats the storefront copy: edits land instantly, mystery drops reveal on the tick
-  const view = $derived(drop && live?.product ? { ...drop, ...live.product, hidden: false } : drop)
-  const rules = $derived(live?.cfg?.chat ?? null)
-  const chatOn = $derived(!!rules && rules.mode !== 'off')
-  let revealKey = $state(0)
-  let wasHidden = false
-  $effect(() => {
-    const hidden = !!view?.hidden
-    if (wasHidden && !hidden) revealKey++
-    wasHidden = hidden
-  })
   const theme = $derived(data?.shop.theme ?? {})
-  const layout = $derived(GRID[theme.layout] ? theme.layout : 'split')
   const style = $derived(
     [theme.accent && `--color-accent: ${theme.accent}`, theme.bg && `--color-app: ${theme.bg}`, `--font-shop: ${FONTS[theme.font] ?? FONTS.sans}`].filter(Boolean).join('; '),
   )
@@ -106,15 +71,7 @@
 
 <Shell title={data?.shop.name ?? handle} href={drop?.link ?? `/${handle}`} logo={drop?.logo ?? theme.logo} links={theme.links ?? []} {style}>
   {#snippet right()}
-    {#if s}
-      <span class="{CHIP} bg-white/5 text-white" title="Watching now"><Eye size={14} />{compact.format(Math.max(s.v, live?.connected ? 1 : 0))}</span>
-    {/if}
-    <button class={BTN_GHOST} onclick={toggleSound} aria-label={sound ? 'Mute dings' : 'Play dings'} aria-pressed={sound}>
-      {#if sound}<Volume2 size={16} />{:else}<VolumeX size={16} />{/if}
-    </button>
-    {#if chatOn}
-      <button class="{BTN_GHOST} lg:hidden" onclick={() => (chatOpen = !chatOpen)} aria-label="Chat" aria-expanded={chatOpen}><MessageCircle size={16} /></button>
-    {/if}
+    <RoomControls {live} bind:chatOpen />
   {/snippet}
 
   {#if error}
@@ -127,33 +84,9 @@
       <p class="text-2xl font-black uppercase tracking-widest 2xl:text-5xl">{slug ? 'No drop here' : 'Nothing dropping yet'}</p>
       <p class="mt-2 text-sm text-muted">{theme.tagline || 'Check back soon.'}</p>
     </div>
-  {:else if view && data}
-    <div class="relative grid min-h-0 flex-1 gap-3 grid-rows-[minmax(0,1fr)_auto] sm:grid-rows-1 md:gap-4 2xl:gap-8 {GRID[layout].base} {chatOn ? GRID[layout].chat : ''}">
-      {#if layout === 'poster'}
-        <div class="pointer-events-none absolute inset-0 overflow-hidden rounded-2xl">
-          {#key revealKey}<div class="h-full {revealKey ? 'animate-reveal' : ''}"><Media media={view.media} title={view.title} mystery={view.hidden} /></div>{/key}
-          <div class="absolute inset-0 bg-linear-to-t from-app via-app/40 to-transparent sm:bg-linear-to-l"></div>
-        </div>
-        <div aria-hidden="true"></div>
-      {:else}
-        {#key revealKey}<div class="h-full min-h-0 {revealKey ? 'animate-reveal' : ''}"><Media media={view.media} title={view.title} mystery={view.hidden} /></div>{/key}
-      {/if}
-
-      <BuyPanel drop={view} {live} {now} drops={data.drops} {handle} {notice} ondismiss={() => (notice = '')} sitekey={data.turnstile} class="relative" />
-
-      {#if chatOn}
-        <aside
-          class="{CARD} {chatOpen ? 'fixed inset-x-3 bottom-12 top-16 z-30 flex sm:left-auto sm:w-96' : 'hidden'} min-h-0 flex-col p-3 lg:relative lg:inset-auto lg:z-auto lg:flex lg:w-auto 2xl:p-6"
-          aria-label="Live chat"
-        >
-          <div class="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[.25em] text-muted 2xl:text-sm">
-            {isOwner ? 'Live chat · you are host' : 'Live chat'}
-            <button class="lg:hidden" onclick={() => (chatOpen = false)} aria-label="Close chat"><X size={16} /></button>
-          </div>
-          <Chat messages={live?.chat ?? []} onsay={say} onmod={isOwner ? moderate : null} {rules} status={s?.st ?? 'scheduled'} refused={live?.chatNo ?? null} />
-        </aside>
-      {/if}
-    </div>
+  {:else if drop && data}
+    <DropRoom {live} {drop} drops={data.drops} {handle} layout={theme.layout} {notice} ondismiss={() => (notice = '')} sitekey={data.turnstile}
+      bind:chatOpen onsay={isOwner ? hostSay : null} onmod={isOwner ? moderate : null} />
   {:else}
     <div class={SPINNER}></div>
   {/if}

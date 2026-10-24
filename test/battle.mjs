@@ -32,7 +32,8 @@ const check = (name, ok, detail = '') => {
 
 // ── mock Stripe ──
 const sessions = new Map()
-const stripeCalls = { create: 0, expire: 0, refund: 0 }
+const stripeCalls = { create: 0, expire: 0, refund: 0, reversal: 0 }
+const transfers = new Set()
 const stripeServer = createServer((req, res) => {
   let raw = ''
   req.on('data', (c) => (raw += c))
@@ -47,6 +48,15 @@ const stripeServer = createServer((req, res) => {
       return res.end(JSON.stringify(s))
     }
     if (req.url === '/turnstile') return res.end(JSON.stringify({ success: p.get('response') === 'human' }))
+    if (req.url === '/v1/accounts' && req.method === 'POST') return res.end(JSON.stringify({ id: 'acct_battle' }))
+    if (req.url === '/v1/account_links') return res.end(JSON.stringify({ url: 'https://connect.stripe.test/onboard' }))
+    if (req.url === '/v1/accounts/acct_battle') return res.end(JSON.stringify({ id: 'acct_battle', charges_enabled: true, capabilities: { transfers: 'active' } }))
+    if (req.url.startsWith('/v1/payment_intents/')) return res.end(JSON.stringify({ latest_charge: `ch_${req.url.split('/').pop()}` }))
+    if (req.url === '/v1/transfers') {
+      transfers.add(req.headers['idempotency-key'])
+      return res.end(JSON.stringify({ id: `tr_${req.headers['idempotency-key']}` }))
+    }
+    if (/\/reversals$/.test(req.url)) stripeCalls.reversal++
     if (/\/expire$/.test(req.url)) stripeCalls.expire++
     if (req.url === '/v1/refunds') stripeCalls.refund++
     res.end('{}')
@@ -99,7 +109,7 @@ const dir = mkdtempSync(join(tmpdir(), 'drops-battle-'))
 mkdirSync('dist', { recursive: true })
 await new Promise((r) => stripeServer.listen(STRIPE_PORT, '127.0.0.1', r))
 execFileSync('npx', ['wrangler', 'd1', 'migrations', 'apply', 'DB', '--local', '--persist-to', dir], { stdio: 'ignore' })
-const vars = { TURNSTILE_SECRET: 'ts_battle', TURNSTILE_VERIFY_URL: `http://127.0.0.1:${STRIPE_PORT}/turnstile`, SESSION_SECRET: 'battle', STRIPE_SECRET_KEY: 'sk_test_battle', STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_API: `http://127.0.0.1:${STRIPE_PORT}`, PUBLIC_ORIGIN: BASE }
+const vars = { SIGNUPS_OPEN: 'true', TURNSTILE_SECRET: 'ts_battle', TURNSTILE_VERIFY_URL: `http://127.0.0.1:${STRIPE_PORT}/turnstile`, SESSION_SECRET: 'battle', STRIPE_SECRET_KEY: 'sk_test_battle', STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_API: `http://127.0.0.1:${STRIPE_PORT}`, PUBLIC_ORIGIN: BASE }
 const wrangler = spawn('node_modules/.bin/wrangler', ['dev', '--port', String(PORT), '--ip', '127.0.0.1', '--persist-to', dir, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])], { stdio: ['ignore', 'pipe', 'pipe'], detached: true })
 let log = ''
 wrangler.stdout.on('data', (d) => (log += d))
@@ -176,17 +186,43 @@ try {
   // payments (webhooks), duplicates, and abandoned checkouts
   const holds = [...sessions.values()]
   const paid = holds.slice(0, PAID)
-  const event = (s, type = 'checkout.session.completed') => ({ type, data: { object: { ...s, payment_status: 'paid', payment_intent: `pi_${s.id}`, amount_total: 4000, currency: 'usd', customer_details: { email: 'fan@example.com', name: 'Fan' } } } })
+  const event = (s, type = 'checkout.session.completed') => ({ type, data: { object: { ...s, payment_status: 'paid', payment_intent: `pi_${s.id}`, amount_total: 4000, currency: 'usd', customer_details: { email: s.email ?? `fan-${s.id}@example.com`, name: 'Fan' } } } })
   const hookStatus = await Promise.all(paid.map((s) => signedWebhook(event(s)).then((r) => r.status)))
   check('webhooks accepted', hookStatus.every((s) => s === 200))
   await signedWebhook(event(paid[0]))
   const forged = await fetch(`${BASE}/api/stripe/webhook`, { method: 'POST', body: JSON.stringify(event(paid[1])), headers: { 'Stripe-Signature': 't=1,v1=00' } })
   check('forged webhook rejected', forged.status === 400)
-  await Promise.all(holds.slice(PAID).map((s) => signedWebhook(event(s, 'checkout.session.expired'))))
-  await waitFor(() => crowd.every((v) => v.last?.a === STOCK - PAID && v.last?.s === PAID), 5000, 'post-payment state')
-  check(`${PAID} sold, abandoned holds back on the shelf`, crowd.every((v) => v.last?.a === STOCK - PAID && v.last?.s === PAID), `a=${crowd[0].last?.a} s=${crowd[0].last?.s}`)
+  // same email pays twice on a limit-1 drop: the second is refunded and its unit goes back on the shelf
+  const dupes = holds.slice(PAID, PAID + 2).map((x) => ({ ...x, email: 'Dupe@Example.com' }))
+  for (const x of dupes) await signedWebhook(event(x))
+  await Promise.all(holds.slice(PAID + 2).map((s) => signedWebhook(event(s, 'checkout.session.expired'))))
+  const SOLD = PAID + 1
+  await waitFor(() => crowd.every((v) => v.last?.a === STOCK - SOLD && v.last?.s === SOLD), 5000, 'post-payment state')
+  check(`${SOLD} sold, abandoned holds back on the shelf`, crowd.every((v) => v.last?.a === STOCK - SOLD && v.last?.s === SOLD), `a=${crowd[0].last?.a} s=${crowd[0].last?.s}`)
   const orders = await (await fetch(`${BASE}/api/me/orders`, { headers: { Cookie: cookie } })).json()
-  check('orders ledger has each payment once, with its size', orders.length === PAID && orders.every((o) => ['black', 'red'].includes(o.variant)), `${orders.length}`)
+  check('orders ledger has each payment once, with its size', orders.length === PAID + 2 && orders.every((o) => ['black', 'red'].includes(o.variant)), `${orders.length}`)
+  check('a second purchase by the same email is refunded', orders.filter((o) => o.email === 'dupe@example.com').map((o) => o.status).sort().join() === 'paid,refunded' && stripeCalls.refund === 1)
+  const paidBuyer = buyers.find((v) => v.buy?.ok && v.buy.id === paid[5].metadata.hold)
+  const repeat = await viewer(paidBuyer.i)
+  repeat.ws.send(JSON.stringify({ t: 'buy', qty: 1, variant: 'red', ts: 'human' }))
+  await waitFor(() => repeat.buy, 5000, 'repeat buyer reply')
+  check('a buyer who already paid hits the per-person limit', repeat.buy?.reason === 'limit', repeat.buy?.reason)
+  repeat.ws.close()
+
+  // payouts: blocked until the creator connects Stripe, then each owed order is transferred exactly once
+  const early = await fetch(`${BASE}/api/me/payouts`, { method: 'POST', headers: { Cookie: cookie } })
+  check('payout refused without a Stripe account', early.status === 409)
+  await fetch(`${BASE}/api/me/stripe`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ forPayouts: true }) })
+  let runs = 0
+  for (let more = true; more && runs < 5; runs++) more = (await (await fetch(`${BASE}/api/me/payouts`, { method: 'POST', headers: { Cookie: cookie } })).json()).more
+  await fetch(`${BASE}/api/me/payouts`, { method: 'POST', headers: { Cookie: cookie } }) // a repeat pays nothing
+  const money = await (await fetch(`${BASE}/api/me/payouts`, { headers: { Cookie: cookie } })).json()
+  check('every paid order transferred exactly once, in batches', transfers.size === SOLD && money.owed.length === 0 && money.payouts.reduce((a, p) => a + p.orders, 0) === SOLD, `${transfers.size} transfers, ${runs} runs`)
+  check('creator gets the order minus the fee', money.payouts[0].amount_cents === money.payouts[0].orders * (4000 - (320 + 30)))
+  const shopOrders = await (await fetch(`${BASE}/api/me/orders`, { headers: { Cookie: cookie } })).json()
+  const refundMe = shopOrders.find((o) => o.status === 'paid')
+  await fetch(`${BASE}/api/me/orders/${refundMe.id}`, { method: 'PUT', headers: { Cookie: cookie }, body: JSON.stringify({ status: 'refunded' }) })
+  check('refunding a paid-out order claws the payout back first', stripeCalls.reversal === 1 && stripeCalls.refund === 2)
 
   // chat crosses shards
   crowd[1].ws.send(JSON.stringify({ t: 'chat', name: 'thom', text: 'everything in its right place' }))
