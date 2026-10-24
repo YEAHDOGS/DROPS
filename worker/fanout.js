@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { LIMITS } from '../shared/drop.js'
 import { parseNode } from './tree.js'
 import { createCheckout, expireCheckout } from './stripe.js'
+import { isHuman } from './turnstile.js'
 
 // Fanout: a node in the broadcast tree. Hubs hold child Fanouts, leaves hold viewers (both use hibernatable sockets).
 // Downstream: relays every room state to its sockets, verbatim. Upstream: viewer counts (summed) and chat (budgeted).
@@ -30,6 +31,7 @@ export class Fanout extends DurableObject {
     this.reportTimer = null
     this.chatWindow = 0
     this.chatSent = 0
+    this.bans = new Set() // silenced chat authors, mirrored from the room
   }
 
   async fetch(req) {
@@ -42,6 +44,7 @@ export class Fanout extends DurableObject {
     this.ctx.acceptWebSocket(server, [child ? CHILD : VIEWER])
     server.serializeAttachment(child ? { node: name, n: 0 } : { node: name, buyer: req.headers.get('x-buyer') ?? 'anon', chatAt: 0, hold: null })
     if (this.state) server.send(this.state)
+    if (child && this.bans.size) server.send(JSON.stringify({ t: 'mod', ban: [...this.bans] }))
     this.ensureLink()
     this.report()
     return new Response(null, { status: 101, webSocket: client })
@@ -62,7 +65,7 @@ export class Fanout extends DurableObject {
 
     if (msg.t === 'ping') return ws.send(JSON.stringify({ t: 'pong', c: msg.c, s: Date.now() }))
     if (msg.t === 'chat') return this.chat(ws, att, msg)
-    if (msg.t === 'buy') return this.buy(ws, att, msg.qty)
+    if (msg.t === 'buy') return this.buy(ws, att, msg)
     if (msg.t === 'cancel' && typeof msg.id === 'string') return this.room().cancel(msg.id.slice(0, 64))
   }
 
@@ -117,12 +120,13 @@ export class Fanout extends DurableObject {
     try { this.up?.send(JSON.stringify(msg)) } catch { /* relinking */ }
   }
 
-  /** Room state flowing down the tree: cache it and relay it untouched. */
+  /** Room traffic flowing down the tree: cache state and bans, relay everything untouched. */
   down(data) {
     if (typeof data !== 'string') return
     try {
       const msg = JSON.parse(data)
       if (msg.t === 'state') [this.state, this.snap] = [data, msg]
+      if (msg.t === 'mod') this.mod(msg)
     } catch { return }
     for (const ws of this.ctx.getWebSockets()) {
       try { ws.send(data) } catch { /* closing socket */ }
@@ -141,6 +145,14 @@ export class Fanout extends DurableObject {
 
   // ── chat ──
 
+  /** Forget deleted messages in the cached state (new joiners never see them) and remember bans. */
+  mod({ del = [], ban = [] }) {
+    for (const k of ban) this.bans.add(k)
+    if (!this.snap?.c || !del.length) return
+    this.snap.c = this.snap.c.filter((m) => !del.includes(m.id))
+    this.state = JSON.stringify(this.snap)
+  }
+
   chatUp(msg) {
     const now = Date.now()
     if (now >= this.chatWindow) [this.chatWindow, this.chatSent] = [now + 1000, 0]
@@ -152,8 +164,10 @@ export class Fanout extends DurableObject {
     const text = clean(msg.text, LIMITS.CHAT_TEXT)
     if (!this.snap?.ch || !text || now - att.chatAt < CHAT_COOLDOWN_MS) return
     ws.serializeAttachment({ ...att, chatAt: now })
-    const m = { id: crypto.randomUUID().slice(0, 12), n: clean(msg.name, LIMITS.CHAT_NAME) || 'anon', x: text, at: now }
+    const k = att.buyer.slice(0, 12) // author key: lets the shop ban a person without learning who they are
+    const m = { id: crypto.randomUUID().slice(0, 12), n: clean(msg.name, LIMITS.CHAT_NAME) || 'anon', x: text, at: now, k }
     const local = JSON.stringify({ t: 'chat', c: [m] })
+    if (this.bans.has(k)) return ws.send(local) // shadow ban: they see themselves, nobody else does
     for (const v of this.ctx.getWebSockets(VIEWER)) {
       try { v.send(local) } catch { /* closing socket */ }
     }
@@ -162,18 +176,26 @@ export class Fanout extends DurableObject {
 
   // ── buying ──
 
-  async buy(ws, att, qty) {
+  async buy(ws, att, { qty, variant, ts }) {
     const reply = (r) => ws.send(JSON.stringify({ t: 'buy', ...r }))
     if (att.hold && att.hold.expiresAt > Date.now()) return reply({ ok: true, ...att.hold })
     if (!Number.isInteger(qty) || qty < 1) return reply({ ok: false, reason: 'limit' })
+    if (variant !== undefined && typeof variant !== 'string') return reply({ ok: false, reason: 'variant' })
     if (this.snap && this.snap.st !== 'live') return reply({ ok: false, reason: this.snap.st })
-    if (this.snap && this.snap.a < qty) return reply({ ok: false, reason: 'claimed' })
+    const left = this.snap ? (variant && this.snap.va ? this.snap.va[variant] ?? 0 : this.snap.a) : Infinity
+    if (left < qty) return reply({ ok: false, reason: 'claimed' })
     if (this.inflight >= MAX_INFLIGHT) return reply({ ok: false, reason: 'busy' })
+
+    if (!att.human) {
+      if (!(await isHuman(this.env, ts))) return reply({ ok: false, reason: 'challenge' })
+      att = { ...ws.deserializeAttachment(), human: true }
+      ws.serializeAttachment(att)
+    }
 
     this.inflight++
     try {
       const room = this.room()
-      const r = await room.reserve(qty, att.buyer)
+      const r = await room.reserve(qty, att.buyer, variant)
       if (!r.ok) return reply(r)
       let session
       try {
@@ -187,7 +209,7 @@ export class Fanout extends DurableObject {
         await expireCheckout(this.env, session.id)
         return reply({ ok: false, reason: 'expired' })
       }
-      const hold = { id: r.hold.id, qty: r.hold.qty, url: session.url, expiresAt: r.hold.expiresAt }
+      const hold = { id: r.hold.id, qty: r.hold.qty, variant: r.hold.variant, url: session.url, expiresAt: r.hold.expiresAt }
       ws.serializeAttachment({ ...ws.deserializeAttachment(), hold })
       reply({ ok: true, ...hold })
     } finally {

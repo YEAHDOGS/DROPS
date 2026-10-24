@@ -38,23 +38,35 @@ export async function verifyPassword(password, stored) {
   return same(b64url(await pbkdf2(password, unb64url(salt), Number(iterations))), hash)
 }
 
-/** Set-Cookie header value for a fresh session. */
-export async function sessionCookie(env, merchantId) {
+/**
+ * Set-Cookie header value for a fresh session. `version` is merchants.session_version: bumping it (password change,
+ * "sign out everywhere") kills every older cookie.
+ */
+export async function sessionCookie(env, merchantId, version) {
   const exp = Date.now() + SESSION_DAYS * DAY_MS
-  const value = `${merchantId}.${exp}.${await hmac(env.SESSION_SECRET, `${merchantId}.${exp}`)}`
+  const body = `${merchantId}.${version}.${exp}`
+  const value = `${body}.${await hmac(env.SESSION_SECRET, body)}`
   return `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86_400}`
 }
 
 export const clearCookie = () => `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 
-/** Merchant id from a valid session cookie, else null. */
+/** { id, version } from a validly signed, unexpired session cookie, else null. Caller checks the version. */
 export async function sessionMerchant(env, req) {
   const raw = (req.headers.get('Cookie') ?? '').split(/;\s*/).find((c) => c.startsWith(`${COOKIE}=`))
   if (!raw || !env.SESSION_SECRET) return null
-  const [id, exp, sig] = raw.slice(COOKIE.length + 1).split('.')
+  const [id, version, exp, sig] = raw.slice(COOKIE.length + 1).split('.')
   if (!id || !(Number(exp) > Date.now()) || !sig) return null
-  return same(sig, await hmac(env.SESSION_SECRET, `${id}.${exp}`)) ? id : null
+  return same(sig, await hmac(env.SESSION_SECRET, `${id}.${version}.${exp}`)) ? { id, version: Number(version) } : null
 }
+
+/** Random URL-safe token + the SHA-256 we store instead of it. */
+export async function newToken() {
+  const token = b64url(crypto.getRandomValues(new Uint8Array(32)))
+  return { token, hash: await sha256(token) }
+}
+
+export const sha256 = async (s) => b64url(await crypto.subtle.digest('SHA-256', encoder.encode(s)))
 
 /** Stable anonymous key for one buyer (per-person hold limits) that never stores a raw IP. */
 export async function buyerKey(env, req) {

@@ -26,11 +26,16 @@
   "kv_namespaces": [{ "binding": "KV", "id": "00000000000000000000000000000000" }],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "dogs-drops-media" }],
 
+  // 10 auth attempts per minute per IP (signup, login, sign-in links).
+  "ratelimits": [{ "name": "AUTH_LIMIT", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],
+
   "vars": {
     "PUBLIC_ORIGIN": "https://drops.dogs.red",
-    "PLATFORM_FEE_BPS": "500"
+    "PLATFORM_FEE_BPS": "500",
+    "EMAIL_FROM": "DOGS DROPS <drops@dogs.red>",
+    "TURNSTILE_SITE_KEY": ""
   },
-  // Secrets (wrangler secret put): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SESSION_SECRET
+  // Secrets (wrangler secret put): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SESSION_SECRET, RESEND_API_KEY, TURNSTILE_SECRET
 
   "observability": { "enabled": true }
 }

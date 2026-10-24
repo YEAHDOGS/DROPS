@@ -4,7 +4,11 @@ import { memorySql } from './sqlite.js'
 
 const T0 = 1_800_000_000_000
 const MIN = 60_000
-const config = (o = {}) => ({ published: true, startsAt: T0, endsAt: null, totalStock: 100, maxPerOrder: 2, holdMinutes: 10, chat: true, ...o })
+const config = (o = {}) => {
+  const c = { published: true, startsAt: T0, endsAt: null, totalStock: 100, maxPerOrder: 2, holdMinutes: 10, chat: true, ...o }
+  c.variants ??= [{ id: 'one', stock: c.totalStock }]
+  return c
+}
 const fresh = (o) => {
   const inv = new Inventory(memorySql())
   inv.configure(config(o))
@@ -48,7 +52,7 @@ describe('Inventory', () => {
   it('completes idempotently and honors late payments only from free stock', () => {
     const inv = fresh({ totalStock: 2, maxPerOrder: 1 })
     const a = inv.reserve(1, 'a', T0, uid())
-    expect(inv.complete('cs_a', a.hold.id, 1, T0)).toEqual({ ok: true, qty: 1 })
+    expect(inv.complete('cs_a', a.hold.id, 1, T0)).toEqual({ ok: true, qty: 1, variant: 'one' })
     expect(inv.complete('cs_a', a.hold.id, 1, T0)).toEqual({ ok: true, duplicate: true })
     expect(inv.sold).toBe(1)
 
@@ -57,8 +61,9 @@ describe('Inventory', () => {
     const c = inv.reserve(1, 'c', T0 + 10 * MIN, uid())
     expect(c.ok).toBe(true)
     expect(inv.complete('cs_b', late.hold.id, 1, T0)).toEqual({ ok: false, reason: 'oversold' })
-    expect(inv.complete('cs_c', c.hold.id, 1, T0)).toEqual({ ok: true, qty: 1 })
+    expect(inv.complete('cs_c', c.hold.id, 1, T0)).toEqual({ ok: true, qty: 1, variant: 'one' })
     expect(inv.status(T0 + 11 * MIN)).toBe('sold_out')
+    expect(inv.soldOutAt).toBe(T0)
   })
 
   it('never lets stock shrink under sold + held', () => {
@@ -67,6 +72,36 @@ describe('Inventory', () => {
     expect(inv.configure(config({ totalStock: 1 })).ok).toBe(false)
     expect(inv.configure(config({ totalStock: 2 })).ok).toBe(true)
     expect(inv.available).toBe(0)
+    expect(inv.configure(config({ totalStock: 2, variants: [{ id: 'other', stock: 2 }] })).ok).toBe(false)
+  })
+
+  it('keeps stock per variant: one size selling out leaves the others', () => {
+    const sizes = [{ id: 's', stock: 1 }, { id: 'm', stock: 2 }]
+    const inv = fresh({ totalStock: 3, maxPerOrder: 1, variants: sizes })
+    expect(inv.reserve(1, 'a', T0, uid(), 's').ok).toBe(true)
+    expect(inv.reserve(1, 'b', T0, uid(), 's').reason).toBe('claimed')
+    expect(inv.reserve(1, 'b', T0, uid(), 'xl').reason).toBe('variant')
+    const m = inv.reserve(1, 'b', T0, uid(), 'm')
+    expect(inv.snapshot(T0).va).toEqual({ s: 0, m: 1 })
+    expect(inv.complete('cs_m', m.hold.id, 1, T0)).toEqual({ ok: true, qty: 1, variant: 'm' })
+    expect(inv.complete('cs_late', 'gone', 1, T0, 's')).toEqual({ ok: false, reason: 'oversold' })
+    expect([inv.sold, inv.held, inv.available]).toEqual([1, 1, 1])
+  })
+
+  it('upgrades a room created before variants existed', () => {
+    const sql = memorySql()
+    sql.exec(`CREATE TABLE holds (id TEXT PRIMARY KEY, qty INTEGER NOT NULL, buyer TEXT NOT NULL, session TEXT, expires_at INTEGER NOT NULL)`)
+    sql.exec(`CREATE TABLE sales (session TEXT PRIMARY KEY, qty INTEGER NOT NULL, at INTEGER NOT NULL)`)
+    sql.exec(`INSERT INTO sales (session, qty, at) VALUES ('old', 3, 1)`)
+    const inv = new Inventory(sql)
+    expect(inv.soldBy).toEqual({ one: 3 })
+  })
+
+  it('tracks the peak crowd', () => {
+    const inv = fresh()
+    inv.notePeak(10)
+    inv.notePeak(4)
+    expect(inv.peak).toBe(10)
   })
 
   it('survives a restart (state rebuilt from SQLite)', () => {
@@ -82,7 +117,8 @@ describe('Inventory', () => {
 
   it('battle: 50k random buyers, expiries and payments never oversell', () => {
     const STOCK = 1000
-    const inv = fresh({ totalStock: STOCK, maxPerOrder: 3, holdMinutes: 2 })
+    const SIZES = ['s', 'm', 'l', 'xl']
+    const inv = fresh({ totalStock: STOCK, maxPerOrder: 3, holdMinutes: 2, variants: SIZES.map((id) => ({ id, stock: STOCK / 4 })) })
     const open = []
     let now = T0
     let rand = 42
@@ -92,7 +128,7 @@ describe('Inventory', () => {
       now += Math.floor(rnd() * 50)
       const roll = rnd()
       if (roll < 0.6) {
-        const r = inv.reserve(1 + Math.floor(rnd() * 3), `b${Math.floor(rnd() * 20_000)}`, now, uid())
+        const r = inv.reserve(1 + Math.floor(rnd() * 3), `b${Math.floor(rnd() * 20_000)}`, now, uid(), SIZES[Math.floor(rnd() * 4)])
         if (r.ok) open.push(r.hold)
       } else if (roll < 0.85 && open.length) {
         const h = open.splice(Math.floor(rnd() * open.length), 1)[0]
@@ -103,7 +139,7 @@ describe('Inventory', () => {
         inv.expire(now)
       }
       expect(inv.sold + inv.held + inv.available).toBe(STOCK)
-      expect(inv.sold).toBeLessThanOrEqual(STOCK)
+      for (const v of SIZES) expect((inv.soldBy[v] ?? 0) + (inv.heldBy[v] ?? 0)).toBeLessThanOrEqual(STOCK / 4)
     }
     expect(inv.sold).toBeGreaterThan(STOCK * 0.9)
   })

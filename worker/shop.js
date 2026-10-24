@@ -1,3 +1,4 @@
+import { DEFAULT_VARIANT } from '../shared/drop.js'
 import { roomOf } from './http.js'
 
 // Row mapping + publishing. Publishing pushes each drop's config into its DropRoom and a read-only storefront
@@ -14,12 +15,14 @@ export function toMerchant(row) {
     payoutMode: row.payout_mode,
     stripeAccountId: row.stripe_account_id,
     stripeReady: !!row.stripe_ready,
+    tax: !!row.tax,
     theme: JSON.parse(row.theme),
     shipping: JSON.parse(row.shipping),
   }
 }
 
 export function toDrop(row) {
+  const variants = JSON.parse(row.variants ?? '[]')
   return {
     id: row.id,
     slug: row.slug,
@@ -28,6 +31,7 @@ export function toDrop(row) {
     priceCents: row.price_cents,
     currency: row.currency,
     totalStock: row.total_stock,
+    variants: variants.length ? variants : [{ id: DEFAULT_VARIANT, label: '', stock: row.total_stock }],
     maxPerOrder: row.max_per_order,
     startsAt: row.starts_at,
     endsAt: row.ends_at,
@@ -46,12 +50,16 @@ export function roomConfig(env, m, d) {
     startsAt: d.startsAt,
     endsAt: d.endsAt,
     totalStock: d.totalStock,
+    variants: d.variants.map(({ id, stock }) => ({ id, stock })),
     maxPerOrder: d.maxPerOrder,
     holdMinutes: d.holdMinutes,
     chat: d.chat,
+    shards: d.shards,
     checkout: {
       dropId: d.id,
       title: d.title,
+      labels: Object.fromEntries(d.variants.filter((v) => v.label).map((v) => [v.id, v.label])),
+      tax: m.tax,
       priceCents: d.priceCents,
       currency: d.currency,
       image: d.media.find((x) => x.kind === 'image')?.url ?? null,

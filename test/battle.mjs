@@ -1,6 +1,7 @@
 // Battle test: boots the real Worker + Durable Objects (wrangler dev / workerd) against a mock Stripe, then throws a
 // crowd at one drop: viewers on a 2-level broadcast tree, a stampede of buyers, webhooks, cancels and chat.
-// Asserts zero oversell, every viewer converging on the same stock, viewer counts and chat crossing shards.
+// Asserts zero oversell per size, every viewer converging on the same stock, viewer counts, chat crossing shards,
+// moderation, the bot gate, sign-in links, session revocation, rate limits and safe deletes.
 //   npm run battle                      defaults: 1500 viewers, 600 buyers, 100 units
 //   VIEWERS=4000 BUYERS=2000 npm run battle
 import { spawn, execFileSync } from 'node:child_process'
@@ -41,10 +42,11 @@ const stripeServer = createServer((req, res) => {
     if (req.url === '/v1/checkout/sessions') {
       stripeCalls.create++
       const id = `cs_test_${sessions.size}`
-      const s = { id, url: `https://checkout.stripe.test/${id}`, metadata: { drop: p.get('metadata[drop]'), hold: p.get('metadata[hold]'), qty: p.get('metadata[qty]'), connected: p.get('metadata[connected]') } }
+      const s = { id, url: `https://checkout.stripe.test/${id}`, metadata: Object.fromEntries(['drop', 'hold', 'qty', 'variant', 'connected'].map((k) => [k, p.get(`metadata[${k}]`)])), name: p.get('line_items[0][price_data][product_data][name]') }
       sessions.set(id, s)
       return res.end(JSON.stringify(s))
     }
+    if (req.url === '/turnstile') return res.end(JSON.stringify({ success: p.get('response') === 'human' }))
     if (/\/expire$/.test(req.url)) stripeCalls.expire++
     if (req.url === '/v1/refunds') stripeCalls.refund++
     res.end('{}')
@@ -61,7 +63,7 @@ function signedWebhook(event) {
 // ── viewer ──
 function viewer(i) {
   return new Promise((resolve, reject) => {
-    const v = { i, last: null, chats: new Set(), buy: null, ws: null, firstSeen: new Map() }
+    const v = { i, last: null, chats: new Map(), buy: null, ws: null, firstSeen: new Map() }
     const ws = new WebSocket(`${BASE.replace('http', 'ws')}/api/live/${dropId}`, { headers: { 'CF-Connecting-IP': `10.0.${i >> 8}.${i & 255}` } })
     v.ws = ws
     ws.onmessage = (e) => {
@@ -70,7 +72,8 @@ function viewer(i) {
         v.last = m
         if (!v.firstSeen.has(m.a)) v.firstSeen.set(m.a, Date.now())
       }
-      for (const c of m.c ?? []) v.chats.add(c.id)
+      for (const c of m.c ?? []) v.chats.set(c.id, c)
+      for (const id of m.del ?? []) v.chats.delete(id)
       if (m.t === 'buy') v.buy = m
     }
     ws.onopen = () => resolve(v)
@@ -94,7 +97,7 @@ const dir = mkdtempSync(join(tmpdir(), 'drops-battle-'))
 mkdirSync('dist', { recursive: true })
 await new Promise((r) => stripeServer.listen(STRIPE_PORT, '127.0.0.1', r))
 execFileSync('npx', ['wrangler', 'd1', 'migrations', 'apply', 'DB', '--local', '--persist-to', dir], { stdio: 'ignore' })
-const vars = { SESSION_SECRET: 'battle', STRIPE_SECRET_KEY: 'sk_test_battle', STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_API: `http://127.0.0.1:${STRIPE_PORT}`, PUBLIC_ORIGIN: BASE }
+const vars = { TURNSTILE_SECRET: 'ts_battle', TURNSTILE_VERIFY_URL: `http://127.0.0.1:${STRIPE_PORT}/turnstile`, SESSION_SECRET: 'battle', STRIPE_SECRET_KEY: 'sk_test_battle', STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET, STRIPE_API: `http://127.0.0.1:${STRIPE_PORT}`, PUBLIC_ORIGIN: BASE }
 const wrangler = spawn('node_modules/.bin/wrangler', ['dev', '--port', String(PORT), '--ip', '127.0.0.1', '--persist-to', dir, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])], { stdio: ['ignore', 'pipe', 'pipe'], detached: true })
 let log = ''
 wrangler.stdout.on('data', (d) => (log += d))
@@ -108,7 +111,8 @@ try {
   const signup = await fetch(`${BASE}/api/auth/signup`, { method: 'POST', body: JSON.stringify({ handle: 'radiohead', email: 'band@example.com', password: 'kid-a-2000', name: 'Radiohead' }) })
   const cookie = signup.headers.get('set-cookie').split(';')[0]
   check('merchant signs up', signup.status === 201)
-  const drop = { title: 'Kid A — 100 vinyl', priceCents: 4000, totalStock: STOCK, maxPerOrder: 1, startsAt: Date.now() + LATER_MS, shards: SHARDS, published: true }
+  const SIZES = [{ id: 'black', label: 'Black', stock: STOCK / 2 }, { id: 'red', label: 'Red', stock: STOCK / 2 }]
+  const drop = { title: 'Kid A — 100 vinyl', priceCents: 4000, variants: SIZES, maxPerOrder: 1, startsAt: Date.now() + LATER_MS, shards: SHARDS, published: true }
   const created = await fetch(`${BASE}/api/me/drops`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify(drop) })
   dropId = (await created.json()).id
   check('drop published', created.status === 201)
@@ -142,10 +146,14 @@ try {
   check('every viewer flips to live', crowd.every((v) => v.last?.st === 'live'))
   const buyers = crowd.slice(0, BUYERS)
   const tBuy = Date.now()
+  const bot = crowd[BUYERS]
+  bot.ws.send(JSON.stringify({ t: 'buy', qty: 1, variant: 'black', ts: 'bot' }))
+  await waitFor(() => bot.buy, 5000, 'bot reply')
+  check('a bot without a Turnstile pass is refused', bot.buy?.reason === 'challenge')
   const attempt = async (v) => {
     for (let tries = 0; tries < 40; tries++) {
       v.buy = null
-      v.ws.send(JSON.stringify({ t: 'buy', qty: 1 }))
+      v.ws.send(JSON.stringify({ t: 'buy', qty: 1, variant: SIZES[v.i % 2].id, ts: 'human' }))
       await waitFor(() => v.buy, 10_000, 'buy reply')
       if (v.buy?.reason !== 'busy') return v.buy
       await sleep(50 + Math.random() * 200)
@@ -158,7 +166,8 @@ try {
   check('losers are told it is claimed', replies.filter((r) => !r?.ok).every((r) => r.reason === 'claimed'), [...new Set(replies.filter((r) => !r?.ok).map((r) => r?.reason))].join(','))
   check('one Checkout session per hold', stripeCalls.create === STOCK, `${stripeCalls.create}`)
   await waitFor(() => crowd.every((v) => v.last?.a === 0), 5000, 'stock 0 everywhere')
-  check('every viewer converges on 0 left', crowd.every((v) => v.last?.a === 0))
+  check('every viewer converges on 0 left, per size', crowd.every((v) => v.last?.a === 0 && v.last?.va?.black === 0 && v.last?.va?.red === 0))
+  check('checkout names the size', [...sessions.values()].every((x) => / — (Black|Red)$/.test(x.name)))
   const lag = crowd.map((v) => v.firstSeen.get(0) - tBuy).sort((a, b) => a - b)
   check('sellout reached the whole crowd', lag.length === VIEWERS, `p50 ${lag[lag.length >> 1]} ms, max ${lag.at(-1)} ms after the first click`)
 
@@ -175,12 +184,50 @@ try {
   await waitFor(() => crowd.every((v) => v.last?.a === STOCK - PAID && v.last?.s === PAID), 5000, 'post-payment state')
   check(`${PAID} sold, abandoned holds back on the shelf`, crowd.every((v) => v.last?.a === STOCK - PAID && v.last?.s === PAID), `a=${crowd[0].last?.a} s=${crowd[0].last?.s}`)
   const orders = await (await fetch(`${BASE}/api/me/orders`, { headers: { Cookie: cookie } })).json()
-  check('orders ledger has each payment once', orders.length === PAID, `${orders.length}`)
+  check('orders ledger has each payment once, with its size', orders.length === PAID && orders.every((o) => ['black', 'red'].includes(o.variant)), `${orders.length}`)
 
   // chat crosses shards
   crowd[1].ws.send(JSON.stringify({ t: 'chat', name: 'thom', text: 'everything in its right place' }))
   await waitFor(() => crowd.every((v) => v.chats.size > 0), 5000, 'chat')
   check('chat reaches every shard', crowd.every((v) => v.chats.size > 0))
+
+  // moderation: delete + shadow-ban the author, host speaks
+  const [msg] = crowd[2].chats.values()
+  const mod = await fetch(`${BASE}/api/me/drops/${dropId}/mod`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ del: [msg.id], ban: [msg.k] }) })
+  await waitFor(() => crowd.every((v) => !v.chats.has(msg.id)), 5000, 'delete')
+  check('deleted message vanishes everywhere', mod.ok && crowd.every((v) => !v.chats.has(msg.id)))
+  await sleep(1600) // chat cooldown
+  crowd[1].ws.send(JSON.stringify({ t: 'chat', name: 'thom', text: 'banned words' }))
+  await fetch(`${BASE}/api/me/drops/${dropId}/say`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ text: 'Restock at midnight.' }) })
+  await waitFor(() => crowd.every((v) => [...v.chats.values()].some((m) => m.host)), 5000, 'host message')
+  check('host message reaches everyone with a badge', crowd.every((v) => [...v.chats.values()].some((m) => m.host && m.n === 'Radiohead')))
+  const sees = (v) => [...v.chats.values()].some((m) => m.x === 'banned words')
+  check('banned author only sees themselves', sees(crowd[1]) && crowd.filter((v) => v !== crowd[1]).every((v) => !sees(v)))
+
+  const stats = await (await fetch(`${BASE}/api/me/drops/${dropId}/state`, { headers: { Cookie: cookie } })).json()
+  check('dashboard records the peak crowd', stats.peak === VIEWERS, `peak=${stats.peak}`)
+
+  // deletes: refused once sold, allowed when untouched
+  const sold = await fetch(`${BASE}/api/me/drops/${dropId}`, { method: 'DELETE', headers: { Cookie: cookie } })
+  const spare = await (await fetch(`${BASE}/api/me/drops`, { method: 'POST', headers: { Cookie: cookie }, body: JSON.stringify({ ...drop, title: 'Spare' }) })).json()
+  const gone = await fetch(`${BASE}/api/me/drops/${spare.id}`, { method: 'DELETE', headers: { Cookie: cookie } })
+  check('a drop with sales cannot be deleted; an empty one can', sold.status === 409 && gone.ok)
+
+  // auth: sign-in link, password change revokes old sessions, rate limit
+  await fetch(`${BASE}/api/auth/link`, { method: 'POST', body: JSON.stringify({ email: 'band@example.com' }) })
+  await waitFor(() => /token=([\w-]+)/.test(log), 5000, 'sign-in link in log')
+  const token = log.match(/token=([\w-]+)/)?.[1]
+  const redeem = await fetch(`${BASE}/api/auth/redeem`, { method: 'POST', body: JSON.stringify({ token }) })
+  const again = await fetch(`${BASE}/api/auth/redeem`, { method: 'POST', body: JSON.stringify({ token }) })
+  check('sign-in link works exactly once', redeem.ok && again.status === 401)
+  const linkCookie = redeem.headers.get('set-cookie').split(';')[0]
+  const changed = await fetch(`${BASE}/api/me/password`, { method: 'PUT', headers: { Cookie: linkCookie }, body: JSON.stringify({ password: 'ok-computer-97' }) })
+  const fresh = changed.headers.get('set-cookie').split(';')[0]
+  const [oldMe, newMe] = await Promise.all([cookie, fresh].map((c) => fetch(`${BASE}/api/me`, { headers: { Cookie: c } }).then((r) => r.json())))
+  check('password change signs out every other session', oldMe === null && newMe?.handle === 'radiohead')
+  const tries = await Promise.all(Array.from({ length: 12 }, () =>
+    fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'CF-Connecting-IP': '6.6.6.6' }, body: JSON.stringify({ email: 'x@example.com', password: 'guess-guess' }) }).then((r) => r.status)))
+  check('login is rate limited per IP', tries.includes(429), tries.join(','))
 
   // the crowd leaves
   for (const v of crowd.slice(0, VIEWERS / 2)) v.ws.close()

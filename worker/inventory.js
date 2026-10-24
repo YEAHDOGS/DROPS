@@ -1,8 +1,9 @@
-import { dropStatus, STATUS } from '../shared/drop.js'
+import { dropStatus, STATUS, DEFAULT_VARIANT } from '../shared/drop.js'
 
 // Atomic inventory for one drop, on the Durable Object's embedded SQLite.
 // Every method is synchronous: no await between check and write, so the DO's single thread makes it atomic.
-// Stock math: available = total - sold - held. A hold is a unit parked while its buyer is in Stripe Checkout.
+// Stock is per variant (sizes, colors): available(v) = stock(v) - sold(v) - held(v).
+// A hold is a unit parked while its buyer is in Stripe Checkout.
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)`,
@@ -20,34 +21,78 @@ export class Inventory {
   constructor(sql) {
     this.sql = sql
     for (const q of SCHEMA) sql.exec(q)
-    const row = sql.exec(`SELECT v FROM kv WHERE k = 'config'`).toArray()[0]
+    for (const table of ['holds', 'sales']) {
+      const cols = sql.exec(`PRAGMA table_info(${table})`).toArray()
+      if (!cols.some((c) => c.name === 'variant')) sql.exec(`ALTER TABLE ${table} ADD COLUMN variant TEXT NOT NULL DEFAULT '${DEFAULT_VARIANT}'`)
+    }
     /** @type {any} */
-    this.config = row ? JSON.parse(row.v) : null
-    this.sold = sql.exec(`SELECT COALESCE(SUM(qty), 0) AS n FROM sales`).one().n
-    this.held = sql.exec(`SELECT COALESCE(SUM(qty), 0) AS n FROM holds`).one().n
+    this.config = this.get('config')
+    this.soldOutAt = this.get('soldOutAt')
+    this.peak = this.get('peak') ?? 0
+    this.soldBy = this.sums('sales')
+    this.heldBy = this.sums('holds')
+  }
+
+  get(k) {
+    const row = this.sql.exec(`SELECT v FROM kv WHERE k = ?`, k).toArray()[0]
+    return row ? JSON.parse(row.v) : null
+  }
+
+  put(k, v) {
+    this.sql.exec(`INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)`, k, JSON.stringify(v))
+  }
+
+  sums(table) {
+    const out = {}
+    for (const r of this.sql.exec(`SELECT variant, SUM(qty) AS n FROM ${table} GROUP BY variant`).toArray()) out[r.variant] = r.n
+    return out
+  }
+
+  get variants() {
+    return this.config?.variants ?? []
+  }
+
+  get sold() {
+    return Object.values(this.soldBy).reduce((a, b) => a + b, 0)
+  }
+
+  get held() {
+    return Object.values(this.heldBy).reduce((a, b) => a + b, 0)
+  }
+
+  availableOf(id) {
+    const v = this.variants.find((x) => x.id === id)
+    return v ? Math.max(0, v.stock - (this.soldBy[id] ?? 0) - (this.heldBy[id] ?? 0)) : 0
   }
 
   get available() {
-    return this.config ? Math.max(0, this.config.totalStock - this.sold - this.held) : 0
+    return this.variants.reduce((sum, v) => sum + this.availableOf(v.id), 0)
   }
 
   status(now) {
     return this.config ? dropStatus(this.config, this.sold, now) : STATUS.DRAFT
   }
 
-  /** Public numbers every viewer sees. */
+  /** Public numbers every viewer sees. `va` (stock per variant) only when there is more than one. */
   snapshot(now) {
     const c = this.config ?? {}
-    return { st: this.status(now), a: this.available, s: this.sold, T: c.totalStock ?? 0, at: c.startsAt ?? 0, end: c.endsAt ?? null }
+    const snap = { st: this.status(now), a: this.available, s: this.sold, T: c.totalStock ?? 0, at: c.startsAt ?? 0, end: c.endsAt ?? null }
+    if (this.variants.length > 1) snap.va = Object.fromEntries(this.variants.map((v) => [v.id, this.availableOf(v.id)]))
+    return snap
   }
 
-  /** Replace the drop config. Stock can never drop below what is already sold or held. */
+  /** Replace the drop config. No variant's stock can drop below what is already sold or held of it. */
   configure(config) {
-    if (config.totalStock < this.sold + this.held) {
-      return { ok: false, reason: `Stock can't go below ${this.sold + this.held} (sold + in checkout)` }
+    const ids = new Set(config.variants.map((v) => v.id))
+    for (const id of new Set([...Object.keys(this.soldBy), ...Object.keys(this.heldBy)])) {
+      const used = (this.soldBy[id] ?? 0) + (this.heldBy[id] ?? 0)
+      if (!used) continue
+      if (!ids.has(id)) return { ok: false, reason: `A variant with ${used} sold or in checkout can't be removed` }
+      const v = config.variants.find((x) => x.id === id)
+      if (v.stock < used) return { ok: false, reason: `${v.label || 'Stock'} can't go below ${used} (sold + in checkout)` }
     }
     this.config = config
-    this.sql.exec(`INSERT OR REPLACE INTO kv (k, v) VALUES ('config', ?)`, JSON.stringify(config))
+    this.put('config', config)
     return { ok: true }
   }
 
@@ -57,19 +102,22 @@ export class Inventory {
    * @param {string} buyer opaque per-person key (hashed IP)
    * @param {number} now
    * @param {string} id hold id
+   * @param {string} [variant] defaults to the first variant
    */
-  reserve(qty, buyer, now, id) {
+  reserve(qty, buyer, now, id, variant = this.variants[0]?.id) {
     const c = this.config
-    if (this.status(now) !== STATUS.LIVE) return { ok: false, reason: this.status(now) }
+    const status = this.status(now)
+    if (status !== STATUS.LIVE) return { ok: false, reason: status }
+    if (!this.variants.some((v) => v.id === variant)) return { ok: false, reason: 'variant' }
     if (!(Number.isInteger(qty) && qty >= 1 && qty <= c.maxPerOrder)) return { ok: false, reason: 'limit' }
     const mine = this.sql.exec(`SELECT COALESCE(SUM(qty), 0) AS n FROM holds WHERE buyer = ?`, buyer).one().n
     if (mine + qty > c.maxPerOrder) return { ok: false, reason: 'limit' }
-    if (this.available < qty) return { ok: false, reason: 'claimed' }
+    if (this.availableOf(variant) < qty) return { ok: false, reason: 'claimed' }
 
     const expiresAt = now + c.holdMinutes * MS_PER_MIN
-    this.sql.exec(`INSERT INTO holds (id, qty, buyer, expires_at) VALUES (?, ?, ?, ?)`, id, qty, buyer, expiresAt)
-    this.held += qty
-    return { ok: true, hold: { id, qty, expiresAt } }
+    this.sql.exec(`INSERT INTO holds (id, qty, buyer, expires_at, variant) VALUES (?, ?, ?, ?, ?)`, id, qty, buyer, expiresAt, variant)
+    this.heldBy[variant] = (this.heldBy[variant] ?? 0) + qty
+    return { ok: true, hold: { id, qty, variant, expiresAt } }
   }
 
   /** Link a hold to its Stripe Checkout session. False if the hold already expired. */
@@ -80,25 +128,30 @@ export class Inventory {
 
   /** Put a hold's units back on the shelf. Returns the hold, or null if it was already gone. */
   release(id) {
-    const hold = this.sql.exec(`SELECT id, qty, session FROM holds WHERE id = ?`, id).toArray()[0]
+    const hold = this.sql.exec(`SELECT id, qty, session, variant FROM holds WHERE id = ?`, id).toArray()[0]
     if (!hold) return null
     this.sql.exec(`DELETE FROM holds WHERE id = ?`, id)
-    this.held -= hold.qty
+    this.heldBy[hold.variant] -= hold.qty
     return hold
   }
 
   /**
    * Payment landed. Idempotent per Stripe session. If the hold already expired the sale is honored from
-   * free stock; if there is none left the caller must refund.
+   * free stock of the same variant; if there is none left the caller must refund.
    */
-  complete(session, holdId, qty, now) {
+  complete(session, holdId, qty, now, variant = this.variants[0]?.id) {
     if (this.sql.exec(`SELECT COUNT(*) AS n FROM sales WHERE session = ?`, session).one().n) return { ok: true, duplicate: true }
     const hold = this.release(holdId)
     const units = hold ? hold.qty : qty
-    if (!hold && this.available < units) return { ok: false, reason: 'oversold' }
-    this.sql.exec(`INSERT INTO sales (session, qty, at) VALUES (?, ?, ?)`, session, units, now)
-    this.sold += units
-    return { ok: true, qty: units }
+    const v = hold ? hold.variant : variant
+    if (!hold && this.availableOf(v) < units) return { ok: false, reason: 'oversold' }
+    this.sql.exec(`INSERT INTO sales (session, qty, at, variant) VALUES (?, ?, ?, ?)`, session, units, now, v)
+    this.soldBy[v] = (this.soldBy[v] ?? 0) + units
+    if (!this.soldOutAt && this.sold >= (this.config?.totalStock ?? Infinity)) {
+      this.soldOutAt = now
+      this.put('soldOutAt', now)
+    }
+    return { ok: true, qty: units, variant: v }
   }
 
   /** Drop every hold past its deadline. Returns them so their Checkout sessions can be closed. */
@@ -106,6 +159,13 @@ export class Inventory {
     const due = this.sql.exec(`SELECT id, qty, session FROM holds WHERE expires_at <= ?`, now).toArray()
     for (const h of due) this.release(h.id)
     return due
+  }
+
+  /** Remember the biggest crowd this drop has seen. */
+  notePeak(viewers) {
+    if (viewers <= this.peak) return
+    this.peak = viewers
+    this.put('peak', viewers)
   }
 
   /** Next moment something changes on its own: a hold expiring, the drop opening or closing. */

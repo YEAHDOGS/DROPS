@@ -41,11 +41,12 @@ export async function stripe(env, path, { params, method = params ? 'POST' : 'GE
  * @param {{ dropId: string, title: string, priceCents: number, currency: string, image?: string, path: string,
  *   destination?: string|null, feeBps: number, shipping: { countries: string[], rates: {label: string, amountCents: number}[] },
  *   invoiceNote?: string }} co checkout config the room was published with
- * @param {{ id: string, qty: number }} hold
+ * @param {{ id: string, qty: number, variant: string }} hold
  */
 export function createCheckout(env, co, hold) {
   const origin = env.PUBLIC_ORIGIN
-  const meta = { drop: co.dropId, hold: hold.id, qty: hold.qty, connected: co.destination ? 1 : 0 }
+  const meta = { drop: co.dropId, hold: hold.id, qty: hold.qty, variant: hold.variant, connected: co.destination ? 1 : 0 }
+  const label = co.labels?.[hold.variant]
   const ships = co.shipping.countries.length > 0
   return stripe(env, 'checkout/sessions', {
     idempotencyKey: hold.id,
@@ -61,7 +62,7 @@ export function createCheckout(env, co, hold) {
         price_data: {
           currency: co.currency,
           unit_amount: co.priceCents,
-          product_data: { name: co.title, images: co.image ? [`${origin}${co.image}`] : undefined },
+          product_data: { name: label ? `${co.title} — ${label}` : co.title, images: co.image ? [`${origin}${co.image}`] : undefined },
         },
       }],
       payment_intent_data: {
@@ -75,6 +76,7 @@ export function createCheckout(env, co, hold) {
           shipping_rate_data: { type: 'fixed_amount', display_name: r.label, fixed_amount: { amount: r.amountCents, currency: co.currency } },
         }))
         : undefined,
+      automatic_tax: co.tax ? { enabled: true } : undefined,
       invoice_creation: { enabled: true, invoice_data: co.invoiceNote ? { footer: co.invoiceNote } : undefined },
     },
   })

@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
+import { LIMITS } from '../shared/drop.js'
 import { Inventory } from './inventory.js'
 import { expireCheckout } from './stripe.js'
 
@@ -8,12 +9,15 @@ import { expireCheckout } from './stripe.js'
 const TICK_MS = 250 // stock + chat broadcast cadence: sales batch into ticks, clients replay them as one ding per unit
 const VIEWERS_MS = 1000 // viewer count cadence
 const CHAT_PER_TICK = 12 // global chat budget; past this, messages still reach their own shard of the crowd
+const MAX_BANS = 5000
 const CHILD = 'child'
 
 export class DropRoom extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env)
     this.inv = new Inventory(ctx.storage.sql)
+    /** @type {string[]} chat authors (hashed keys) silenced by the shop */
+    this.bans = this.inv.get('bans') ?? []
     this.chat = []
     this.timer = null
     this.dueAt = 0
@@ -26,6 +30,7 @@ export class DropRoom extends DurableObject {
     this.ctx.acceptWebSocket(server, [CHILD])
     server.serializeAttachment({ n: 0 })
     server.send(this.message([]))
+    if (this.bans.length) server.send(JSON.stringify({ t: 'mod', ban: this.bans }))
     return new Response(null, { status: 101, webSocket: client })
   }
 
@@ -36,13 +41,13 @@ export class DropRoom extends DurableObject {
       ws.serializeAttachment({ n: msg.n })
       return this.schedule(VIEWERS_MS)
     }
-    if (msg.t === 'chat' && msg.m && this.chat.length < CHAT_PER_TICK) {
+    if (msg.t === 'chat' && msg.m && !this.bans.includes(msg.m.k) && this.chat.length < CHAT_PER_TICK) {
       this.chat.push(msg.m)
       this.schedule(TICK_MS)
     }
   }
 
-  async webSocketClose(ws) {
+  async webSocketClose() {
     this.schedule(VIEWERS_MS)
   }
 
@@ -61,8 +66,13 @@ export class DropRoom extends DurableObject {
     return r
   }
 
-  reserve(qty, buyer) {
-    const r = this.inv.reserve(qty, buyer, Date.now(), crypto.randomUUID())
+  /** Shard count for the live router when the KV copy hasn't propagated yet. Null = not published. */
+  meta() {
+    return this.inv.config?.published ? { shards: this.inv.config.shards } : null
+  }
+
+  reserve(qty, buyer, variant) {
+    const r = this.inv.reserve(qty, buyer, Date.now(), crypto.randomUUID(), variant)
     if (!r.ok) return r
     this.changed()
     return { ...r, checkout: this.inv.config.checkout }
@@ -80,14 +90,45 @@ export class DropRoom extends DurableObject {
     return true
   }
 
-  complete(session, holdId, qty) {
-    const r = this.inv.complete(session, holdId, qty, Date.now())
+  complete(session, holdId, qty, variant) {
+    const r = this.inv.complete(session, holdId, qty, Date.now(), variant)
     if (r.ok && !r.duplicate) this.changed()
     return r
   }
 
+  /** Dashboard numbers. */
   state() {
-    return { ...this.inv.snapshot(Date.now()), v: this.viewers(), held: this.inv.held }
+    return { ...this.inv.snapshot(Date.now()), v: this.viewers(), held: this.inv.held, peak: this.inv.peak, soldOutAt: this.inv.soldOutAt }
+  }
+
+  /** Erase a drop that never sold anything. False if it has sales or open holds. */
+  async wipe() {
+    if (this.inv.sold || this.inv.held) return false
+    for (const ws of this.ctx.getWebSockets()) ws.close(1000, 'deleted')
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.deleteAll()
+    return true
+  }
+
+  // ── moderation (shop owner) ──
+
+  /** Delete messages and/or silence their authors, everywhere in the tree. */
+  moderate({ del = [], ban = [] }) {
+    const fresh = ban.filter((k) => typeof k === 'string' && !this.bans.includes(k))
+    if (fresh.length) {
+      this.bans = [...this.bans, ...fresh].slice(-MAX_BANS)
+      this.inv.put('bans', this.bans)
+    }
+    this.chat = this.chat.filter((m) => !del.includes(m.id) && !fresh.includes(m.k))
+    this.broadcast(JSON.stringify({ t: 'mod', del: del.slice(0, 100), ban: fresh }))
+  }
+
+  /** The shop speaks: skips the budget, wears a host badge. */
+  say(name, text) {
+    const x = String(text ?? '').trim().slice(0, LIMITS.CHAT_TEXT)
+    if (!x) return
+    this.chat.unshift({ id: crypto.randomUUID().slice(0, 12), n: String(name).slice(0, LIMITS.CHAT_NAME), x, at: Date.now(), host: true })
+    this.schedule(0)
   }
 
   // ── broadcast ──
@@ -99,7 +140,9 @@ export class DropRoom extends DurableObject {
   }
 
   message(chat) {
-    return JSON.stringify({ t: 'state', ...this.inv.snapshot(Date.now()), ch: this.inv.config?.chat ?? false, v: this.viewers(), c: chat.length ? chat : undefined })
+    const v = this.viewers()
+    this.inv.notePeak(v)
+    return JSON.stringify({ t: 'state', ...this.inv.snapshot(Date.now()), ch: this.inv.config?.chat ?? false, v, c: chat.length ? chat : undefined })
   }
 
   changed() {
@@ -122,7 +165,10 @@ export class DropRoom extends DurableObject {
 
   flush() {
     this.timer = null
-    const data = this.message(this.chat.splice(0))
+    this.broadcast(this.message(this.chat.splice(0)))
+  }
+
+  broadcast(data) {
     for (const ws of this.ctx.getWebSockets(CHILD)) {
       try { ws.send(data) } catch { /* closing socket */ }
     }
