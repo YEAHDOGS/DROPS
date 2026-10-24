@@ -29,7 +29,15 @@ Stripe ──webhook──► Worker ──► DropRoom.complete ──► D1 or
 - **Chat scales by sampling.** Your own shard sees you instantly, and the room rebroadcasts a budgeted global
   stream.
 - **Money.** "DOGS handles it": platform Checkout. "Connect my Stripe": Express onboarding plus destination charges
-  with `PLATFORM_FEE_BPS`. Stripe Checkout collects shipping and generates the invoice.
+  with `PLATFORM_FEE_BPS`. Stripe Checkout collects shipping and generates the invoice, and Stripe Tax is optional.
+- **Sizes and colors.** Each option has its own atomic stock. The checkout line item names the option, and the
+  order records it.
+- **Fair buying.** Cloudflare Turnstile proves a human once per socket, the hold limit is per person, and auth
+  endpoints are rate limited per IP.
+- **Shops own their room.** The host can post in chat with a badge, delete messages, and silence people
+  everywhere. Silenced people still see their own messages (a shadow ban).
+- **Accounts.** One-time emailed sign-in links (which double as password reset). Changing the password signs out
+  every other session.
 
 ## Run it
 
@@ -46,16 +54,14 @@ Webhooks in dev: `stripe listen --forward-to localhost:8787/api/stripe/webhook`.
 ## Test
 
 ```sh
-npm test          # unit: inventory fuzz (50k ops), tree, webhook signatures, passwords, rules, time zones
-npm run battle    # boots real workerd + mock Stripe: 1500 viewers, 600-buyer stampede, webhooks, chat
+npm test          # unit: per-size inventory fuzz (50k ops), tree, webhooks, passwords, rules, time zones, CSP
+npm run battle    # real workerd + mock Stripe/Turnstile: 1500 viewers, 600-buyer stampede, 30 checks
 VIEWERS=4000 BUYERS=2000 npm run battle
+TARGET=https://drops-staging.dogs.red DROP=<id> VIEWERS=30000 npm run load   # deployed load test
 ```
 
 ## Deploy
 
-1. `wrangler d1 create dogs-drops`, `wrangler kv namespace create STOREFRONT`, `wrangler r2 bucket create dogs-drops-media`,
-   then put the ids in `wrangler.jsonc`.
-2. Add the secrets with `wrangler secret put` for `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SESSION_SECRET`.
-3. In Stripe, point a webhook at `/api/stripe/webhook` for `checkout.session.completed`,
-   `checkout.session.async_payment_succeeded`, `checkout.session.expired` and `charge.refunded`.
-4. `npm run deploy`
+See [DEPLOY.md](DEPLOY.md) for keys, resources, Stripe setup, the staging acceptance list, the load test and
+rollback. CI (`.github/workflows/ci.yml`) runs the tests, the battle test and a zero-warning build on every push.
+**Deploy** is a manual workflow that targets staging or production.

@@ -9,7 +9,9 @@
     "db:init": "wrangler d1 migrations apply DB --local",
     "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning vitest run",
     "battle": "node test/battle.mjs",
-    "deploy": "vite build && wrangler d1 migrations apply DB --remote && wrangler deploy"
+    "deploy": "vite build && wrangler d1 migrations apply DB --remote --env=\"\" && wrangler deploy --env=\"\"",
+    "deploy:staging": "vite build && wrangler d1 migrations apply DB --remote --env staging && wrangler deploy --env staging",
+    "load": "node test/load.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

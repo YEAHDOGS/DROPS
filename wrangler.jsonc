@@ -37,5 +37,30 @@
   },
   // Secrets (wrangler secret put): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SESSION_SECRET, RESEND_API_KEY, TURNSTILE_SECRET
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+
+  // `--env staging`: a full copy at drops-staging.dogs.red with its own data. Bindings and vars don't inherit,
+  // so each is restated. Fill in ids from the same `wrangler ... create` commands with a -staging suffix.
+  "env": {
+    "staging": {
+      "name": "dogs-drops-staging",
+      "routes": [{ "pattern": "drops-staging.dogs.red", "custom_domain": true }],
+      "durable_objects": {
+        "bindings": [
+          { "name": "DROP_ROOM", "class_name": "DropRoom" },
+          { "name": "FANOUT", "class_name": "Fanout" }
+        ]
+      },
+      "d1_databases": [{ "binding": "DB", "database_name": "dogs-drops-staging", "database_id": "00000000-0000-0000-0000-000000000001", "migrations_dir": "migrations" }],
+      "kv_namespaces": [{ "binding": "KV", "id": "00000000000000000000000000000001" }],
+      "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "dogs-drops-media-staging" }],
+      "ratelimits": [{ "name": "AUTH_LIMIT", "namespace_id": "1002", "simple": { "limit": 10, "period": 60 } }],
+      "vars": {
+        "PUBLIC_ORIGIN": "https://drops-staging.dogs.red",
+        "PLATFORM_FEE_BPS": "500",
+        "EMAIL_FROM": "DOGS DROPS <drops@dogs.red>",
+        "TURNSTILE_SITE_KEY": ""
+      }
+    }
+  }
 }

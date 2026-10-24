@@ -3,6 +3,8 @@ import { BRANCH, depthFor, nodeName, parseNode } from '../worker/tree.js'
 import { verifyWebhook } from '../worker/stripe.js'
 import { hashPassword, verifyPassword } from '../worker/auth.js'
 import { dropStatus, validateDrop, validateShop } from '../shared/drop.js'
+import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 describe('broadcast tree', () => {
   it('sizes depth so no node has more than BRANCH children', () => {
@@ -76,5 +78,13 @@ describe('drop rules', () => {
     expect([50, 100, 150, 200].map((t) => dropStatus(d, 0, t))).toEqual(['scheduled', 'live', 'live', 'ended'])
     expect(dropStatus(d, 5, 150)).toBe('sold_out')
     expect(dropStatus({ ...d, published: false }, 0, 150)).toBe('draft')
+  })
+})
+
+describe('content security policy', () => {
+  it('allows exactly the inline fallback script in index.html', () => {
+    const script = readFileSync('index.html', 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1]
+    const hash = createHash('sha256').update(script).digest('base64')
+    expect(readFileSync('public/_headers', 'utf8')).toContain(`'sha256-${hash}'`)
   })
 })

@@ -1,0 +1,23 @@
+# Every push: unit tests, the workerd battle test, and a zero-warning production build.
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run battle
+      - name: Build (fails on any compiler warning)
+        run: |
+          npx vite build 2>&1 | tee build.log
+          if grep -iE "warn|svelte.dev/e/" build.log; then echo "::error::Build has warnings"; exit 1; fi
